@@ -13,6 +13,6 @@ setup(
     description="Connects together complex workflows.",
     include_package_data=True,
     install_requires=[
-            "simplejson >= 3.6.5",
+            "simplejson >= 2.1.1",
         ]
 )
