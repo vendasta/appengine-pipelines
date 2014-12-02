@@ -1,0 +1,1 @@
+recursive-include pipeline/ui *.html *.css *.js *.gif

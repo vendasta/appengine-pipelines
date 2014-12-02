@@ -2,7 +2,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="pipelines",
+    name="pipeline",
     version="1.0.0",
     packages=find_packages(),
     author="VendAsta",
@@ -13,6 +13,6 @@ setup(
     description="Connects together complex workflows.",
     include_package_data=True,
     install_requires=[
-            "simplejson >= 2.1.1",
+            "simplejson == 2.1.1",
         ]
 )
