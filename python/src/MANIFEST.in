@@ -1,1 +1,1 @@
-recursive-include pipeline/ui *.html *.css *.js *.gif
+recursive-include pipeline *.html *.css *.js *.gif
