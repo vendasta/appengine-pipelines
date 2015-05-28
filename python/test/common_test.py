@@ -30,7 +30,7 @@ import test_shared
 import testutil
 
 
-class CommonTest(testutil.TestSetupMixin, unittest.TestCase):
+class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest.TestCase):
 
   def setUp(self):
     super(CommonTest, self).setUp()
