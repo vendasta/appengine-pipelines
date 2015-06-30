@@ -3,11 +3,9 @@
 
 import setuptools
 
-# To debug, set DISTUTILS_DEBUG env var to anything.
 setuptools.setup(
     name="pipeline",
     version="1.2.0",
-    name="GoogleAppEnginePipeline",
     packages=setuptools.find_packages(),
     author="Kevin Sookocheff",
     author_email="ksookocheff@vendasta.com",
@@ -21,7 +19,6 @@ setuptools.setup(
     # Exclude these files from installation.
     exclude_package_data={"": ["README"]},
     install_requires=[
-      "GoogleAppEngineCloudStorageClient >= 1.9.21",
-      ],
-    extras_require={'python2.5': ["simplejson >= 3.6.5"]}
+        "GoogleAppEngineCloudStorageClient >= 1.9.21",
+    ]
 )
