@@ -5,7 +5,7 @@ import setuptools
 
 setuptools.setup(
     name="pipeline",
-    version="1.2.0",
+    version="1.9.22.1-vendasta",
     packages=setuptools.find_packages(),
     author="Kevin Sookocheff",
     author_email="ksookocheff@vendasta.com",
@@ -19,6 +19,7 @@ setuptools.setup(
     # Exclude these files from installation.
     exclude_package_data={"": ["README"]},
     install_requires=[
-        "GoogleAppEngineCloudStorageClient >= 1.9.21",
-    ]
+      "GoogleAppEngineCloudStorageClient >= 1.9.22",
+      ],
+    extras_require={'python2.5': ["simplejson >= 3.6.5"]}
 )
