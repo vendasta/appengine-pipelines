@@ -107,12 +107,12 @@ def utc_to_local(utc_datetime):
     local_datetime = datetime.datetime.fromtimestamp(timestamp)
     return local_datetime.replace(microsecond=utc_datetime.microsecond)
 
-class TaskRunningMixin(object):
+class TaskRunningMixin:
   """A mix-in that runs a Pipeline using tasks."""
 
   def setUp(self):
     """Sets up the test harness."""
-    super(TaskRunningMixin, self).setUp()
+    super().setUp()
     self.taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
     self.queue_name = 'default'
     self.test_mode = False
@@ -158,7 +158,7 @@ class TaskRunningMixin(object):
       if the_match:
         break
     else:
-      self.fail('No matching handler for "%s %s"' % (method, url))
+      self.fail('No matching handler for "{} {}"'.format(method, url))
 
     handler = handler_class()
     request = webapp.Request(environ)
@@ -196,11 +196,11 @@ class TaskRunningMixin(object):
     return pipeline.__class__.from_id(pipeline.pipeline_id).outputs
 
 
-class TestModeMixin(object):
+class TestModeMixin:
   """A mix-in that runs a pipeline using the test mode."""
 
   def setUp(self):
-    super(TestModeMixin, self).setUp()
+    super().setUp()
     self.test_mode = True
 
   def run_pipeline(self, pipeline, *args, **kwargs):

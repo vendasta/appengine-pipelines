@@ -33,7 +33,7 @@ from . import testutil
 class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest.TestCase):
 
   def setUp(self):
-    super(CommonTest, self).setUp()
+    super().setUp()
 
   def testReturn(self):
     self.assertEqual(
@@ -153,14 +153,14 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
     self.assertEqual('', self.run_pipeline(common.Concat()).default.value)
 
   def testUnion(self):
-    self.assertEqual(list(set([1, 2, 3, 4])), self.run_pipeline(
+    self.assertEqual(list({1, 2, 3, 4}), self.run_pipeline(
         common.Union([1], [], [2, 3], [], [4])).default.value)
     self.assertEqual([], self.run_pipeline(
         common.Union([], [], [], [])).default.value)
     self.assertEqual([], self.run_pipeline(common.Union()).default.value)
 
   def testIntersection(self):
-    self.assertEqual(list(set([1, 3])), self.run_pipeline(
+    self.assertEqual(list({1, 3}), self.run_pipeline(
         common.Intersection([1, 2, 3], [1, 3, 7], [0, 3, 1])).default.value)
     self.assertEqual([], self.run_pipeline(
         common.Intersection([1, 2, 3], [4, 5, 6], [7, 8, 9])).default.value)
@@ -170,7 +170,7 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
         [], self.run_pipeline(common.Intersection()).default.value)
 
   def testUniquify(self):
-    self.assertEqual(set([3, 2, 1]), set(self.run_pipeline(
+    self.assertEqual({3, 2, 1}, set(self.run_pipeline(
         common.Uniquify(1, 2, 3, 3, 2, 1)).default.value))
     self.assertEqual([], self.run_pipeline(common.Uniquify()).default.value)
 

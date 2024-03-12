@@ -25,13 +25,13 @@ import os
 import sys
 import tempfile
 
-class TestSetupMixin(object):
+class TestSetupMixin:
 
   TEST_APP_ID = 'my-app-id'
   TEST_VERSION_ID = 'my-version.1234'
 
   def setUp(self):
-    super(TestSetupMixin, self).setUp()
+    super().setUp()
 
     from google.appengine.api import apiproxy_stub_map
     from google.appengine.api import memcache
@@ -78,5 +78,5 @@ class TestSetupMixin(object):
                       for name in define_queues)))
 
   def tearDown(self):
-    super(TestSetupMixin, self).tearDown()
+    super().tearDown()
     self.testbed.deactivate()

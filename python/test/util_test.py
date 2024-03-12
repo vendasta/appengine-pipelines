@@ -29,7 +29,7 @@ class JsonSerializationTest(unittest.TestCase):
 class GetTaskTargetTest(unittest.TestCase):
 
   def setUp(self):
-    super(GetTaskTargetTest, self).setUp()
+    super().setUp()
     os.environ["CURRENT_VERSION_ID"] = "v7.1"
     os.environ["CURRENT_MODULE_ID"] = "foo-module"
 

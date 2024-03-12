@@ -3614,9 +3614,9 @@ class UnusedOutputReference(pipeline.Pipeline):
   def run(self):
     result = yield EchoParticularNamedSync(
         one='red', two='blue', three='green', four='yellow')
-    print((result.one))
-    print((result.two))
-    print((result.three))
+    print(result.one)
+    print(result.two)
+    print(result.three)
     yield EchoSync(result.four)
 
 

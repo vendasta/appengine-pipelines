@@ -63,7 +63,7 @@ def _get_task_target():
 
   version = os.environ["CURRENT_VERSION_ID"].split(".")[0]
   module = os.environ["CURRENT_MODULE_ID"]
-  return "%s.%s" % (version, module)
+  return "{}.{}".format(version, module)
 
 
 def for_name(fq_name, recursive=False):
@@ -109,7 +109,7 @@ def for_name(fq_name, recursive=False):
     if recursive:
       raise
     else:
-      raise ImportError("Could not find '%s' on path '%s'" % (
+      raise ImportError("Could not find '{}' on path '{}'".format(
                         short_name, module_name))
   except ImportError as e:
     # module_name is not actually a module. Try for_name for it to figure
@@ -122,7 +122,7 @@ def for_name(fq_name, recursive=False):
         # The module was found, but the function component is missing.
         raise KeyError()
     except KeyError:
-      raise ImportError("Could not find '%s' on path '%s'" % (
+      raise ImportError("Could not find '{}' on path '{}'".format(
                         short_name, module_name))
     except ImportError:
       # This means recursive import attempts failed, thus we will raise the
@@ -148,8 +148,8 @@ def is_generator_function(obj):
     true if the object is generator function.
   """
   CO_GENERATOR = 0x20
-  return bool(((inspect.isfunction(obj) or inspect.ismethod(obj)) and
-               obj.__code__.co_flags & CO_GENERATOR))
+  return bool((inspect.isfunction(obj) or inspect.ismethod(obj)) and
+               obj.__code__.co_flags & CO_GENERATOR)
 
 
 class JsonEncoder(json.JSONEncoder):
@@ -164,7 +164,7 @@ class JsonEncoder(json.JSONEncoder):
       json_struct = encoder(o)
       json_struct[self.TYPE_ID] = type(o).__name__
       return json_struct
-    return super(JsonEncoder, self).default(o)
+    return super().default(o)
 
 
 class JsonDecoder(json.JSONDecoder):
@@ -173,7 +173,7 @@ class JsonDecoder(json.JSONDecoder):
   def __init__(self, **kwargs):
     if "object_hook" not in kwargs:
       kwargs["object_hook"] = self._dict_to_obj
-    super(JsonDecoder, self).__init__(**kwargs)
+    super().__init__(**kwargs)
 
   def _dict_to_obj(self, d):
     """Converts a dictionary of json object to a Python object."""

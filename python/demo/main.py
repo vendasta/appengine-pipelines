@@ -47,7 +47,7 @@ class LongCount(pipeline.Pipeline):
     count = 0
     while True:
       query = db.GqlQuery(
-          'SELECT * FROM %s WHERE %s = :1' % (entity_kind, property_name),
+          'SELECT * FROM {} WHERE {} = :1'.format(entity_kind, property_name),
           value.lower(), key_only=True, cursor=cursor)
       result = query.fetch(1000)
       count += len(result)
@@ -103,7 +103,7 @@ class EmailCountReport(pipeline.Pipeline):
     logging.info('Email body is:\n%s', rendered)
 
     # Works in production, I swear!
-    sender = '%s@%s.appspotmail.com' % (os.environ['APPLICATION_ID'],
+    sender = '{}@{}.appspotmail.com'.format(os.environ['APPLICATION_ID'],
                                         os.environ['APPLICATION_ID'])
     try:
       mail.send_mail(
