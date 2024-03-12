@@ -38,12 +38,12 @@ def _fix_path():
 
 
 try:
-  from pipeline import *
-except ImportError, e:
+  from .pipeline import *
+except ImportError as e:
   import logging
   logging.warning(
       'Could not load Pipeline API. Will fix path for testing. %s: %s',
       e.__class__.__name__, str(e))
   _fix_path()
   del logging
-  from pipeline import *
+  from .pipeline import *

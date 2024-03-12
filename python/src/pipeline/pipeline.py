@@ -37,7 +37,7 @@ import re
 import sys
 import threading
 import time
-import urllib
+import urllib.request, urllib.parse, urllib.error
 import uuid
 
 from google.appengine.api import mail
@@ -64,9 +64,9 @@ except ImportError:
   import simplejson as json
 
 # Relative imports
-import models
-import status_ui
-import util as mr_util
+from . import models
+from . import status_ui
+from . import util as mr_util
 
 # pylint: disable=g-bad-name
 # pylint: disable=protected-access
@@ -329,7 +329,7 @@ class PipelineFuture(object):
       UnexpectedPipelineError when resolve_outputs is True and any of the output
       slots could not be retrived from the Datastore.
     """
-    for name, slot_key in already_defined.iteritems():
+    for name, slot_key in list(already_defined.items()):
       if not isinstance(slot_key, db.Key):
         slot_key = db.Key(slot_key)
 
@@ -346,9 +346,9 @@ class PipelineFuture(object):
         slot._exists = True
 
     if resolve_outputs:
-      slot_key_dict = dict((s.key, s) for s in self._output_dict.itervalues())
-      all_slots = db.get(slot_key_dict.keys())
-      for slot, slot_record in zip(slot_key_dict.itervalues(), all_slots):
+      slot_key_dict = dict((s.key, s) for s in list(self._output_dict.values()))
+      all_slots = db.get(list(slot_key_dict.keys()))
+      for slot, slot_record in zip(iter(list(slot_key_dict.values())), all_slots):
         if slot_record is None:
           raise UnexpectedPipelineError(
               'Inherited output named "%s" for pipeline class "%s" is '
@@ -390,7 +390,7 @@ class ClassProperty(object):
     return self.method(obj)
 
 
-class Pipeline(object):
+class Pipeline(object, metaclass=_PipelineMeta):
   """A Pipeline function-object that performs operations and has a life cycle.
 
   Class properties (to be overridden by sub-classes):
@@ -421,8 +421,6 @@ class Pipeline(object):
     queue_name: The queue this pipeline runs on or None if unknown.
     current_attempt: The current attempt being tried for this pipeline.
   """
-
-  __metaclass__ = _PipelineMeta
 
   # To be set by sub-classes
   async = False
@@ -563,7 +561,7 @@ class Pipeline(object):
     pipeline_record = _pipeline_record
 
     # Support pipeline IDs and idempotence_keys that are not unicode.
-    if not isinstance(pipeline_id, unicode):
+    if not isinstance(pipeline_id, str):
       try:
         pipeline_id = pipeline_id.encode('utf-8')
       except UnicodeDecodeError:
@@ -578,7 +576,7 @@ class Pipeline(object):
 
     try:
       pipeline_func_class = mr_util.for_name(pipeline_record.class_path)
-    except ImportError, e:
+    except ImportError as e:
       logging.warning('Tried to find Pipeline %s#%s, but class could '
                       'not be found. Using default Pipeline class instead.',
                       pipeline_record.class_path, pipeline_id)
@@ -650,7 +648,7 @@ class Pipeline(object):
     """
     if not idempotence_key:
       idempotence_key = uuid.uuid4().hex
-    elif not isinstance(idempotence_key, unicode):
+    elif not isinstance(idempotence_key, str):
       try:
         idempotence_key.encode('utf-8')
       except UnicodeDecodeError:
@@ -667,7 +665,7 @@ class Pipeline(object):
     except Error:
       # Pass through exceptions that originate in this module.
       raise
-    except Exception, e:
+    except Exception as e:
       # Re-type any exceptions that were raised in dependent methods.
       raise PipelineSetupError('Error starting %s#%s: %s' % (
           self, idempotence_key, str(e)))
@@ -749,7 +747,7 @@ class Pipeline(object):
       UnexpectedPipelineError if the Slot no longer exists. SlotNotDeclaredError
       if trying to output to a slot that was not declared ahead of time.
     """
-    if isinstance(name_or_slot, basestring):
+    if isinstance(name_or_slot, str):
       slot = getattr(self.outputs, name_or_slot)
     elif isinstance(name_or_slot, Slot):
       slot = name_or_slot
@@ -803,14 +801,14 @@ class Pipeline(object):
       if status_links:
         # Alphabeticalize the list.
         status_record.link_names = sorted(
-            db.Text(s) for s in status_links.iterkeys())
+            db.Text(s) for s in list(status_links.keys()))
         status_record.link_urls = [
             db.Text(status_links[name]) for name in status_record.link_names]
 
       status_record.status_time = datetime.datetime.utcnow()
 
       status_record.put()
-    except Exception, e:
+    except Exception as e:
       raise PipelineRuntimeError('Could not set status for %s#%s: %s' %
           (self, self.pipeline_id, str(e)))
 
@@ -848,7 +846,7 @@ class Pipeline(object):
       raise UnexpectedPipelineError(
           'May only call get_callback_url() method for asynchronous pipelines.')
     kwargs['pipeline_id'] = self._pipeline_key.name()
-    params = urllib.urlencode(sorted(kwargs.items()))
+    params = urllib.parse.urlencode(sorted(kwargs.items()))
     return '%s/callback?%s' % (self.base_path, params)
 
   def get_callback_task(self, *args, **kwargs):
@@ -979,7 +977,7 @@ The Pipeline API
           'been scheduled for execution.')
 
     ALLOWED = ('backoff_seconds', 'backoff_factor', 'max_attempts', 'target')
-    for name, value in kwargs.iteritems():
+    for name, value in list(kwargs.items()):
       if name not in ALLOWED:
         raise TypeError('Unexpected keyword: %s=%r' % (name, value))
       setattr(self, name, value)
@@ -1058,7 +1056,7 @@ The Pipeline API
     # defined in the same file as the handler will get __module__ set to
     # __main__. Thus we need to find out its real fully qualified path.
     if cls.__module__ == '__main__':
-      for name, module in module_dict.items():
+      for name, module in list(module_dict.items()):
         if name == '__main__':
           continue
         found = getattr(module, cls.__name__, None)
@@ -1267,7 +1265,7 @@ def _write_json_blob(encoded_value, pipeline_id=None):
   # Use posixpath to get a / even if we're running on windows somehow
   file_name = posixpath.join(*path_components)
   with cloudstorage.open(file_name, 'w', content_type='application/json') as f:
-    for start_index in xrange(0, len(encoded_value), _MAX_JSON_SIZE):
+    for start_index in range(0, len(encoded_value), _MAX_JSON_SIZE):
       end_index = start_index + _MAX_JSON_SIZE
       f.write(encoded_value[start_index:end_index])
 
@@ -1299,7 +1297,7 @@ def _dereference_args(pipeline_name, args, kwargs):
     UnexpectedPipelineError if an unknown parameter type was passed.
   """
   lookup_slots = set()
-  for arg in itertools.chain(args, kwargs.itervalues()):
+  for arg in itertools.chain(args, iter(list(kwargs.values()))):
     if arg['type'] == 'slot':
       lookup_slots.add(db.Key(arg['slot_key']))
 
@@ -1321,7 +1319,7 @@ def _dereference_args(pipeline_name, args, kwargs):
       raise UnexpectedPipelineError('Unknown parameter type: %r' % current_arg)
 
   kwarg_dict = {}
-  for key, current_arg in kwargs.iteritems():
+  for key, current_arg in list(kwargs.items()):
     if current_arg['type'] == 'slot':
       kwarg_dict[key] = slot_dict[db.Key(current_arg['slot_key'])]
     elif current_arg['type'] == 'value':
@@ -1387,7 +1385,7 @@ def _generate_args(pipeline, future, queue_name, base_path):
       arg_list.append({'type': 'value', 'value': current_arg})
 
   kwarg_dict = params['kwargs']
-  for name, current_arg in pipeline.kwargs.iteritems():
+  for name, current_arg in list(pipeline.kwargs.items()):
     if isinstance(current_arg, PipelineFuture):
       current_arg = current_arg.default
     if isinstance(current_arg, Slot):
@@ -1404,7 +1402,7 @@ def _generate_args(pipeline, future, queue_name, base_path):
 
   output_slots = params['output_slots']
   output_slot_keys = set()
-  for name, slot in future._output_dict.iteritems():
+  for name, slot in list(future._output_dict.items()):
     output_slot_keys.add(slot.key)
     output_slots[name] = str(slot.key)
 
@@ -1794,7 +1792,7 @@ class _PipelineContext(object):
     # Adjust all pipeline output keys for this Pipeline to be children of
     # the _PipelineRecord, that way we can write them all and submit in a
     # single transaction.
-    for name, slot in pipeline.outputs._output_dict.iteritems():
+    for name, slot in list(pipeline.outputs._output_dict.items()):
       slot.key = db.Key.from_path(
           *slot.key.to_path(), **dict(parent=pipeline._pipeline_key))
 
@@ -1811,7 +1809,7 @@ class _PipelineContext(object):
              _short_repr(pipeline_record.params)))
 
       entities_to_put = []
-      for name, slot in pipeline.outputs._output_dict.iteritems():
+      for name, slot in list(pipeline.outputs._output_dict.items()):
         entities_to_put.append(_SlotRecord(
             key=slot.key,
             root_pipeline=pipeline._pipeline_key))
@@ -1850,7 +1848,7 @@ class _PipelineContext(object):
     task = txn()
     # Immediately mark the output slots as existing so they can be filled
     # by asynchronous pipelines or used in test mode.
-    for output_slot in pipeline.outputs._output_dict.itervalues():
+    for output_slot in list(pipeline.outputs._output_dict.values()):
       output_slot._exists = True
     return task
 
@@ -1888,7 +1886,7 @@ class _PipelineContext(object):
       args_adjusted.append(value)
 
     kwargs_adjusted = {}
-    for name, arg in stage.kwargs.iteritems():
+    for name, arg in list(stage.kwargs.items()):
       if isinstance(arg, PipelineFuture):
         arg = arg.default
       if isinstance(arg, Slot):
@@ -1930,7 +1928,7 @@ class _PipelineContext(object):
 
           last_sub_stage = yielded
           next_value = yielded.outputs
-          all_output_slots.update(next_value._output_dict.itervalues())
+          all_output_slots.update(iter(list(next_value._output_dict.values())))
         else:
           raise UnexpectedPipelineError(
               'Yielded a disallowed value: %r' % yielded)
@@ -1941,7 +1939,7 @@ class _PipelineContext(object):
         # may not happen at all. Missing outputs will be caught when they
         # are passed to the stage as inputs, or verified from the outside by
         # the test runner.
-        for slot_name, slot in last_sub_stage.outputs._output_dict.iteritems():
+        for slot_name, slot in list(last_sub_stage.outputs._output_dict.items()):
           stage.outputs._output_dict[slot_name] = slot
           # Any inherited slots won't be checked for declaration.
           all_output_slots.remove(slot)
@@ -1958,7 +1956,7 @@ class _PipelineContext(object):
     # Enforce strict output usage at the top level.
     if root:
       found_outputs = set()
-      for slot in stage.outputs._output_dict.itervalues():
+      for slot in list(stage.outputs._output_dict.values()):
         if slot.filled:
           found_outputs.add(slot.name)
         if slot.name == 'default':
@@ -2046,7 +2044,7 @@ class _PipelineContext(object):
 
     try:
       pipeline_func_class = mr_util.for_name(pipeline_record.class_path)
-    except ImportError, e:
+    except ImportError as e:
       # This means something is wrong with the deployed code. Rely on the
       # taskqueue system to do retries.
       retry_message = '%s: %s' % (e.__class__.__name__, str(e))
@@ -2060,7 +2058,7 @@ class _PipelineContext(object):
           pipeline_key.name(),
           resolve_outputs=finalize_signal,
           _pipeline_record=pipeline_record)
-    except SlotNotFilledError, e:
+    except SlotNotFilledError as e:
       logging.exception(
           'Could not resolve arguments for %s#%s. Most likely this means there '
           'is a bug in the Pipeline runtime or some intermediate data has been '
@@ -2068,7 +2066,7 @@ class _PipelineContext(object):
           pipeline_record.class_path, pipeline_key.name())
       self.transition_aborted(pipeline_key)
       return
-    except Exception, e:
+    except Exception as e:
       retry_message = '%s: %s' % (e.__class__.__name__, str(e))
       logging.exception(
           'Instantiating %s#%s raised exception. %s',
@@ -2096,7 +2094,7 @@ class _PipelineContext(object):
         pipeline_func._finalized_internal(
               self, pipeline_key, root_pipeline_key,
               caller_output, abort_signal)
-      except Exception, e:
+      except Exception as e:
         # This means something is wrong with the deployed finalization code.
         # Rely on the taskqueue system to do retries.
         retry_message = '%s: %s' % (e.__class__.__name__, str(e))
@@ -2154,7 +2152,7 @@ class _PipelineContext(object):
     try:
       result = pipeline_func._run_internal(
           self, pipeline_key, root_pipeline_key, caller_output)
-    except Exception, e:
+    except Exception as e:
       if self.handle_run_exception(pipeline_key, pipeline_func, e):
         raise
       else:
@@ -2169,7 +2167,7 @@ class _PipelineContext(object):
       # will cause normal abort/retry behavior.
       try:
         self.fill_slot(pipeline_key, caller_output.default, result)
-      except Exception, e:
+      except Exception as e:
         retry_message = 'Bad return value. %s: %s' % (
             e.__class__.__name__, str(e))
         logging.exception(
@@ -2182,7 +2180,7 @@ class _PipelineContext(object):
         else:
           return
 
-      expected_outputs = set(caller_output._output_dict.iterkeys())
+      expected_outputs = set(caller_output._output_dict.keys())
       found_outputs = self.session_filled_output_names
       if expected_outputs != found_outputs:
         exception = SlotNotFilledError(
@@ -2205,7 +2203,7 @@ class _PipelineContext(object):
         yielded = pipeline_iter.send(next_value)
       except StopIteration:
         break
-      except Exception, e:
+      except Exception as e:
         if self.handle_run_exception(pipeline_key, pipeline_func, e):
           raise
         else:
@@ -2245,7 +2243,7 @@ class _PipelineContext(object):
       # Here the generator has yielded nothing, and thus acts as a synchronous
       # function. We can skip the rest of the generator steps completely and
       # fill the default output slot to cause finalizing.
-      expected_outputs = set(caller_output._output_dict.iterkeys())
+      expected_outputs = set(caller_output._output_dict.keys())
       expected_outputs.remove('default')
       found_outputs = self.session_filled_output_names
       if expected_outputs != found_outputs:
@@ -2262,8 +2260,8 @@ class _PipelineContext(object):
 
     # Allocate any SlotRecords that do not yet exist.
     entities_to_put = []
-    for future in sub_stage_dict.itervalues():
-      for slot in future._output_dict.itervalues():
+    for future in list(sub_stage_dict.values()):
+      for slot in list(future._output_dict.values()):
         if not slot._exists:
           entities_to_put.append(_SlotRecord(
               key=slot.key, root_pipeline=root_pipeline_key))
@@ -2281,7 +2279,7 @@ class _PipelineContext(object):
       try:
         dependent_slots, output_slots, params_text, params_blob = \
             _generate_args(sub_stage, future, self.queue_name, self.base_path)
-      except Exception, e:
+      except Exception as e:
         retry_message = 'Bad child arguments. %s: %s' % (
             e.__class__.__name__, str(e))
         logging.exception(
@@ -2730,7 +2728,7 @@ class _FanoutHandler(webapp.RequestHandler):
           name='ae-pipeline-fan-out-' + child_pipeline.key().name()))
 
     batch_size = 100  # Limit of taskqueue API bulk add.
-    for i in xrange(0, len(all_tasks), batch_size):
+    for i in range(0, len(all_tasks), batch_size):
       batch = all_tasks[i:i+batch_size]
       try:
         taskqueue.Queue(context.queue_name).add(batch)
@@ -2782,7 +2780,7 @@ class _CallbackHandler(webapp.RequestHandler):
   def get(self):
     try:
       self.run_callback()
-    except _CallbackTaskError, e:
+    except _CallbackTaskError as e:
       logging.error(str(e))
       if 'HTTP_X_APPENGINE_TASKRETRYCOUNT' in self.request.environ:
         # Silently give up on tasks that have retried many times. This
@@ -2820,7 +2818,7 @@ class _CallbackHandler(webapp.RequestHandler):
     real_class_path = params['class_path']
     try:
       pipeline_func_class = mr_util.for_name(real_class_path)
-    except ImportError, e:
+    except ImportError as e:
       raise _CallbackTaskError(
           'Cannot load class named "%s" for pipeline ID "%s".'
           % (real_class_path, pipeline_id))
@@ -2996,7 +2994,7 @@ def _get_internal_status(pipeline_key=None,
 
   # Fix the key names in parameters to match JavaScript style.
   for value_dict in itertools.chain(
-      output['args'], output['kwargs'].itervalues()):
+      output['args'], iter(list(output['kwargs'].values()))):
     if 'slot_key' in value_dict:
       value_dict['slotKey'] = value_dict.pop('slot_key')
 
@@ -3027,7 +3025,7 @@ def _get_internal_status(pipeline_key=None,
       output['statusConsoleUrl'] = status_record.console_url
     if status_record.link_names:
       output['statusLinks'] = dict(
-          zip(status_record.link_names, status_record.link_urls))
+          list(zip(status_record.link_names, status_record.link_urls)))
 
   # Populate status-depenedent fields.
   if status in ('run', 'finalizing', 'done', 'retry'):
@@ -3175,7 +3173,7 @@ def get_status_tree(root_pipeline_id):
         # a particular _SlotRecord, so we can report which pipeline *should*
         # be the filler.
         child_outputs = child_pipeline_record.params['output_slots']
-        for output_slot_key in child_outputs.itervalues():
+        for output_slot_key in list(child_outputs.values()):
           slot_filler_dict[db.Key(output_slot_key)] = child_pipeline_key
 
   output = {
@@ -3184,7 +3182,7 @@ def get_status_tree(root_pipeline_id):
     'pipelines': {},
   }
 
-  for pipeline_key in found_pipeline_dict.keys():
+  for pipeline_key in list(found_pipeline_dict.keys()):
     if pipeline_key not in valid_pipeline_keys:
       continue
     output['pipelines'][pipeline_key.name()] = _get_internal_status(
@@ -3194,7 +3192,7 @@ def get_status_tree(root_pipeline_id):
         barrier_dict=found_barrier_dict,
         status_dict=found_status_dict)
 
-  for slot_key, filler_pipeline_key in slot_filler_dict.iteritems():
+  for slot_key, filler_pipeline_key in list(slot_filler_dict.items()):
     output['slots'][str(slot_key)] = _get_internal_slot(
         slot_key=slot_key,
         filler_pipeline_key=filler_pipeline_key,
@@ -3272,7 +3270,7 @@ def get_root_list(class_path=None, cursor=None, count=50):
           status_dict=status_dict)
       output['pipelineId'] = pipeline_record.key().name()
       results.append(output)
-    except PipelineStatusError, e:
+    except PipelineStatusError as e:
       output = {'status': e.message}
       output['classPath'] = ''
       output['pipelineId'] = pipeline_record.key().name()

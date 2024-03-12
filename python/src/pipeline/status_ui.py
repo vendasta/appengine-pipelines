@@ -31,7 +31,7 @@ except ImportError:
   import simplejson as json
 
 # Relative imports
-import util
+from . import util
 
 
 class _StatusUiHandler(webapp.RequestHandler):
@@ -71,7 +71,7 @@ class _StatusUiHandler(webapp.RequestHandler):
   }
 
   def get(self, resource=''):
-    import pipeline  # Break circular dependency
+    from . import pipeline  # Break circular dependency
     if pipeline._ENFORCE_AUTH:
       if users.get_current_user() is None:
         logging.debug('User is not logged in')
@@ -120,7 +120,7 @@ class _BaseRpcHandler(webapp.RequestHandler):
   """
 
   def get(self):
-    import pipeline  # Break circular dependency
+    from . import pipeline  # Break circular dependency
     if pipeline._ENFORCE_AUTH:
       if not users.is_current_user_admin():
         logging.debug('User is not admin: %r', users.get_current_user())
@@ -140,7 +140,7 @@ class _BaseRpcHandler(webapp.RequestHandler):
     try:
       self.handle()
       output = json.dumps(self.json_response, cls=util.JsonEncoder)
-    except Exception, e:
+    except Exception as e:
       self.json_response.clear()
       self.json_response['error_class'] = e.__class__.__name__
       self.json_response['error_message'] = str(e)
@@ -160,7 +160,7 @@ class _TreeStatusHandler(_BaseRpcHandler):
   """RPC handler for getting the status of all children of root pipeline."""
 
   def handle(self):
-    import pipeline  # Break circular dependency
+    from . import pipeline  # Break circular dependency
     self.json_response.update(
         pipeline.get_status_tree(self.request.get('root_pipeline_id')))
 
@@ -169,7 +169,7 @@ class _ClassPathListHandler(_BaseRpcHandler):
   """RPC handler for getting the list of all Pipeline classes defined."""
 
   def handle(self):
-    import pipeline  # Break circular dependency
+    from . import pipeline  # Break circular dependency
     self.json_response['classPaths'] = pipeline.get_pipeline_names()
 
 
@@ -177,7 +177,7 @@ class _RootListHandler(_BaseRpcHandler):
   """RPC handler for getting the status of all root pipelines."""
 
   def handle(self):
-    import pipeline  # Break circular dependency
+    from . import pipeline  # Break circular dependency
     self.json_response.update(
         pipeline.get_root_list(
             class_path=self.request.get('class_path'),

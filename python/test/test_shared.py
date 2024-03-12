@@ -16,7 +16,7 @@
 
 """Shared code used by Pipeline API tests."""
 
-import StringIO
+import io
 import base64
 import cgi
 import datetime
@@ -46,7 +46,7 @@ def get_tasks(queue_name='default'):
   """
   taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
 
-  stub_globals = taskqueue_stub.GetTasks.func_globals
+  stub_globals = taskqueue_stub.GetTasks.__globals__
   old_format = stub_globals['_FormatEta']
   # Yes-- this is a vicious hack to have the task queue stub return the
   # ETA of tasks as datetime instances instead of text strings.
@@ -81,7 +81,7 @@ def delete_tasks(task_list, queue_name='default'):
 def create_handler(handler_class, method, url, headers={}, input_body=''):
   """Creates a webapp.RequestHandler instance and request/response objects."""
   environ = {
-      'wsgi.input': StringIO.StringIO(input_body),
+      'wsgi.input': io.StringIO(input_body),
       'wsgi.errors': sys.stderr,
       'REQUEST_METHOD': method,
       'SCRIPT_NAME': '',
@@ -92,7 +92,7 @@ def create_handler(handler_class, method, url, headers={}, input_body=''):
   if method == 'GET':
     environ['PATH_INFO'], environ['QUERY_STRING'] = (
         (url.split('?', 1) + [''])[:2])
-  for name, value in headers.iteritems():
+  for name, value in list(headers.items()):
     fixed_name = name.replace('-', '_').upper()
     environ['HTTP_' + fixed_name] = value
 
@@ -136,7 +136,7 @@ class TaskRunningMixin(object):
     headers = dict(task['headers'])
 
     environ = {
-        'wsgi.input': StringIO.StringIO(base64.b64decode(task['body'])),
+        'wsgi.input': io.StringIO(base64.b64decode(task['body'])),
         'wsgi.errors': sys.stderr,
         'REQUEST_METHOD': method,
         'SCRIPT_NAME': '',
@@ -184,13 +184,13 @@ class TaskRunningMixin(object):
 
     if require_slots_filled:
       for slot_record in _SlotRecord.all():
-        self.assertEquals(_SlotRecord.FILLED, slot_record.status,
+        self.assertEqual(_SlotRecord.FILLED, slot_record.status,
                           '_SlotRecord = %r' % slot_record.key())
       for barrier_record in _BarrierRecord.all():
-        self.assertEquals(_BarrierRecord.FIRED, barrier_record.status,
+        self.assertEqual(_BarrierRecord.FIRED, barrier_record.status,
                           '_BarrierRecord = %r' % barrier_record.key())
       for pipeline_record in _PipelineRecord.all():
-        self.assertEquals(_PipelineRecord.DONE, pipeline_record.status,
+        self.assertEqual(_PipelineRecord.DONE, pipeline_record.status,
                           '_PipelineRecord = %r' % pipeline_record.key())
 
     return pipeline.__class__.from_id(pipeline.pipeline_id).outputs

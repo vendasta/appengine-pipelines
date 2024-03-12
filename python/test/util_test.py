@@ -23,7 +23,7 @@ class JsonSerializationTest(unittest.TestCase):
     obj = {"a": 1, "b": [{"c": "d"}], "e": now}
     new_obj = util.json.loads(util.json.dumps(
         obj, cls=util.JsonEncoder), cls=util.JsonDecoder)
-    self.assertEquals(obj, new_obj)
+    self.assertEqual(obj, new_obj)
 
 
 class GetTaskTargetTest(unittest.TestCase):
