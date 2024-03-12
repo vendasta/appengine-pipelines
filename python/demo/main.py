@@ -25,9 +25,11 @@ import time
 from google.appengine.api import mail
 from google.appengine.api import users
 from google.appengine.ext import db
-from google.appengine.ext import webapp
-from google.appengine.ext.webapp import template
-from google.appengine.ext.webapp import util
+
+# Add the pipeline directory to the python path so we can import it.
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
+
 
 import pipeline
 from pipeline import common
