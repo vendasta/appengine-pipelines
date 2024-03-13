@@ -9,6 +9,7 @@ def serve(ctx):
     args = [
         'dev_appserver.py',
         '--python_virtualenv_path=./venv',
+        '--clear_datastore=yes',
         './demo'
     ]
     invoke.run(" ".join(args))

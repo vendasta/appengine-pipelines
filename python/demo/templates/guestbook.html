@@ -12,7 +12,7 @@
 <h2>Other favorite colors</h2>
 {% if posts %}
 {% for post in posts %}
-<p><em>{{post.color|escape}}</em> posted at {{post.write_time|date:"Y-m-d\TH:i:s\Z"}}</p>
+<p><em>{{post.color|escape}}</em> posted at {{post.write_time.strftime("%Y-%m-%dT%H:%M:%SZ")}}</p>
 {% endfor %}
 {% else %}
 <p>No posts yet.</p>

@@ -29,6 +29,7 @@ __all__ = [
 import datetime
 import hashlib
 import itertools
+import json
 import logging
 import os
 import posixpath
@@ -37,35 +38,19 @@ import re
 import sys
 import threading
 import time
-import urllib.request, urllib.parse, urllib.error
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 
-from google.appengine.api import mail
-from google.appengine.api import app_identity
-from google.appengine.api import users
-from google.appengine.api import taskqueue
-from google.appengine.ext import blobstore
-from google.appengine.ext import db
-from google.appengine.ext import webapp
-
-# pylint: disable=g-import-not-at-top
-# TODO(user): Cleanup imports if/when cloudstorage becomes part of runtime.
-try:
-  # Check if the full cloudstorage package exists. The stub part is in runtime.
-  import cloudstorage
-  if hasattr(cloudstorage, "_STUB"):
-    cloudstorage = None
-except ImportError:
-  pass  # CloudStorage library not available
-
-try:
-  import json
-except ImportError:
-  import simplejson as json
+from flask.views import MethodView
+from flask import request, abort, make_response
+from google.appengine.api import app_identity, mail, taskqueue, users
+from google.appengine.ext import blobstore, db
+from google.cloud import storage
 
 # Relative imports
-from . import models
-from . import status_ui
+from . import models, status_ui
 from . import util as mr_util
 
 # pylint: disable=g-bad-name
@@ -423,7 +408,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
   """
 
   # To be set by sub-classes
-  async = False
+  async_ = False
   output_names = []
   public_callbacks = False
   admin_callbacks = False
@@ -701,7 +686,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
       True if the Pipeline should be retried, False if it cannot be cancelled
       mid-flight for some reason.
     """
-    if not self.async:
+    if not self.async_:
       raise UnexpectedPipelineError(
           'May only call retry() method for asynchronous pipelines.')
     if self.try_cancel():
@@ -726,7 +711,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     """
     # TODO: Use thread-local variable to enforce that this is not called
     # while a pipeline is executing in the current thread.
-    if (self.async and self._root_pipeline_key == self._pipeline_key and
+    if (self.async_ and self._root_pipeline_key == self._pipeline_key and
         not self.try_cancel()):
       # Handle the special case where the root pipeline is async and thus
       # cannot be aborted outright.
@@ -825,7 +810,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     # TODO: Enforce that all outputs expected by this async pipeline were
     # filled before this complete() function was called. May required all
     # async functions to declare their outputs upfront.
-    if not self.async:
+    if not self.async_:
       raise UnexpectedPipelineError(
           'May only call complete() method for asynchronous pipelines.')
     self._context.fill_slot(
@@ -842,7 +827,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
       UnexpectedPipelineError if this is invoked on pipeline that is not async.
     """
     # TODO: Support positional parameters.
-    if not self.async:
+    if not self.async_:
       raise UnexpectedPipelineError(
           'May only call get_callback_url() method for asynchronous pipelines.')
     kwargs['pipeline_id'] = self._pipeline_key.name()
@@ -861,7 +846,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     Returns:
       A taskqueue.Task instance that must be enqueued by the caller.
     """
-    if not self.async:
+    if not self.async_:
       raise UnexpectedPipelineError(
           'May only call get_callback_task() method for asynchronous pipelines.')
 
@@ -1264,10 +1249,13 @@ def _write_json_blob(encoded_value, pipeline_id=None):
   path_components.append(uuid.uuid4().hex)
   # Use posixpath to get a / even if we're running on windows somehow
   file_name = posixpath.join(*path_components)
-  with cloudstorage.open(file_name, 'w', content_type='application/json') as f:
-    for start_index in range(0, len(encoded_value), _MAX_JSON_SIZE):
-      end_index = start_index + _MAX_JSON_SIZE
-      f.write(encoded_value[start_index:end_index])
+
+  client = storage.Client()
+  bucket = client.get_bucket(default_bucket)
+  blob = bucket.blob(file_name)
+  for start_index in range(0, len(encoded_value), _MAX_JSON_SIZE):
+    end_index = start_index + _MAX_JSON_SIZE
+    blob.upload_from_string(encoded_value[start_index:end_index], content_type='application/json')
 
   key_str = blobstore.create_gs_key("/gs" + file_name)
   logging.debug("Created blob for filename = %s gs_key = %s", file_name, key_str)
@@ -1901,7 +1889,7 @@ class _PipelineContext(object):
     logging.debug('Running %s(*%s, **%s)', stage._class_path,
                   _short_repr(stage.args), _short_repr(stage.kwargs))
 
-    if stage.async:
+    if stage.async_:
       stage.run_test(*stage.args, **stage.kwargs)
     elif pipeline_generator:
       all_output_slots = set()
@@ -2081,7 +2069,7 @@ class _PipelineContext(object):
           pipeline_func_class.run)
       caller_output = pipeline_func.outputs
 
-    if (abort_signal and pipeline_func.async and
+    if (abort_signal and pipeline_func.async_ and
         pipeline_record.status == _PipelineRecord.RUN
         and not pipeline_func.try_cancel()):
       logging.warning(
@@ -2146,7 +2134,7 @@ class _PipelineContext(object):
       return
 
     if (pipeline_record.status == _PipelineRecord.WAITING and
-        pipeline_func.async):
+        pipeline_func.async_):
       self.transition_run(pipeline_key)
 
     try:
@@ -2158,7 +2146,7 @@ class _PipelineContext(object):
       else:
         return
 
-    if pipeline_func.async:
+    if pipeline_func.async_:
       return
 
     if not pipeline_generator:
@@ -2643,71 +2631,69 @@ class _PipelineContext(object):
 ################################################################################
 
 
-class _BarrierHandler(webapp.RequestHandler):
+class _BarrierHandler(MethodView):
   """Request handler for triggering barriers."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    context = _PipelineContext.from_environ(self.request.environ)
+    context = _PipelineContext.from_environ(request.environ)
     context.notify_barriers(
-        self.request.get('slot_key'),
-        self.request.get('cursor'),
-        use_barrier_indexes=self.request.get('use_barrier_indexes') == 'True')
+        request.form.get('slot_key'),
+        request.form.get('cursor'),
+        use_barrier_indexes=request.form.get('use_barrier_indexes') == 'True')
+    return "", 200
 
-
-class _PipelineHandler(webapp.RequestHandler):
+class _PipelineHandler(MethodView):
   """Request handler for running pipelines."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    context = _PipelineContext.from_environ(self.request.environ)
-    context.evaluate(self.request.get('pipeline_key'),
-                     purpose=self.request.get('purpose'),
-                     attempt=int(self.request.get('attempt', '0')))
+    context = _PipelineContext.from_environ(request.environ)
+    context.evaluate(request.form.get('pipeline_key'),
+                     purpose=request.form.get('purpose'),
+                     attempt=int(request.form.get('attempt', '0')))
+    return "", 200
 
 
-class _FanoutAbortHandler(webapp.RequestHandler):
+class _FanoutAbortHandler(MethodView):
   """Request handler for fanning out abort notifications."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    context = _PipelineContext.from_environ(self.request.environ)
+    context = _PipelineContext.from_environ(request.environ)
     context.continue_abort(
-        self.request.get('root_pipeline_key'),
-        self.request.get('cursor'))
+        request.form.get('root_pipeline_key'),
+        request.form.get('cursor'))
+    return "", 200
 
 
-class _FanoutHandler(webapp.RequestHandler):
+class _FanoutHandler(MethodView):
   """Request handler for fanning out pipeline children."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    context = _PipelineContext.from_environ(self.request.environ)
+    context = _PipelineContext.from_environ(request.environ)
 
     # Set of stringified db.Keys of children to run.
     all_pipeline_keys = set()
 
     # For backwards compatibility with the old style of fan-out requests.
-    all_pipeline_keys.update(self.request.get_all('pipeline_key'))
+    all_pipeline_keys.update(request.form.getlist('pipeline_key'))
 
     # Fetch the child pipelines from the parent. This works around the 10KB
     # task payload limit. This get() is consistent-on-read and the fan-out
     # task is enqueued in the transaction that updates the parent, so the
     # fanned_out property is consistent here.
-    parent_key = self.request.get('parent_key')
-    child_indexes = [int(x) for x in self.request.get_all('child_indexes')]
+    parent_key = request.form.get('parent_key')
+    child_indexes = [int(x) for x in request.form.getlist('child_indexes')]
     if parent_key:
       parent_key = db.Key(parent_key)
       parent = db.get(parent_key)
@@ -2734,17 +2720,17 @@ class _FanoutHandler(webapp.RequestHandler):
         taskqueue.Queue(context.queue_name).add(batch)
       except (taskqueue.TombstonedTaskError, taskqueue.TaskAlreadyExistsError):
         pass
+    return "", 200
 
 
-class _CleanupHandler(webapp.RequestHandler):
+class _CleanupHandler(MethodView):
   """Request handler for cleaning up a Pipeline."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    root_pipeline_key = db.Key(self.request.get('root_pipeline_key'))
+    root_pipeline_key = db.Key(request.form.get('root_pipeline_key'))
     logging.debug('Cleaning up root_pipeline_key=%r', root_pipeline_key)
 
     # TODO(user): Accumulate all BlobKeys from _PipelineRecord and
@@ -2769,34 +2755,35 @@ class _CleanupHandler(webapp.RequestHandler):
         _BarrierIndex.all(keys_only=True)
         .filter('root_pipeline =', root_pipeline_key))
     db.delete(barrier_index_keys)
+    return "", 200
 
 
-class _CallbackHandler(webapp.RequestHandler):
+class _CallbackHandler(MethodView):
   """Receives asynchronous callback requests from humans or tasks."""
 
   def post(self):
-    self.get()
+    return self.get()
 
   def get(self):
     try:
-      self.run_callback()
+      return self.run_callback()
     except _CallbackTaskError as e:
       logging.error(str(e))
-      if 'HTTP_X_APPENGINE_TASKRETRYCOUNT' in self.request.environ:
+      if 'HTTP_X_APPENGINE_TASKRETRYCOUNT' in request.environ:
         # Silently give up on tasks that have retried many times. This
         # probably means that the target pipeline has been deleted, so there's
         # no reason to keep trying this task forever.
         retry_count = int(
-            self.request.environ.get('HTTP_X_APPENGINE_TASKRETRYCOUNT'))
+            request.environ.get('HTTP_X_APPENGINE_TASKRETRYCOUNT'))
         if retry_count > _MAX_CALLBACK_TASK_RETRIES:
           logging.error('Giving up on task after %d retries',
                         _MAX_CALLBACK_TASK_RETRIES)
-          return
+          return "", 200
 
       # NOTE: The undescriptive error code 400 are present to address security
       # risks of giving external users access to cause PipelineRecord lookups
       # and execution.
-      self.response.set_status(400)
+      return abort(400)
 
   def run_callback(self):
     """Runs the callback for the pipeline specified in the request.
@@ -2804,7 +2791,7 @@ class _CallbackHandler(webapp.RequestHandler):
     Raises:
       _CallbackTaskError if something was wrong with the request parameters.
     """
-    pipeline_id = self.request.get('pipeline_id')
+    pipeline_id = request.form.get('pipeline_id')
     if not pipeline_id:
       raise _CallbackTaskError('"pipeline_id" parameter missing.')
 
@@ -2823,7 +2810,7 @@ class _CallbackHandler(webapp.RequestHandler):
           'Cannot load class named "%s" for pipeline ID "%s".'
           % (real_class_path, pipeline_id))
 
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       if pipeline_func_class.public_callbacks:
         pass
       elif pipeline_func_class.admin_callbacks:
@@ -2837,9 +2824,13 @@ class _CallbackHandler(webapp.RequestHandler):
             % pipeline_id)
 
     kwargs = {}
-    for key in self.request.arguments():
-      if key != 'pipeline_id':
-        kwargs[str(key)] = self.request.get(key)
+    for key in request.args.to_dict().keys():
+        if key != 'pipeline_id':
+            kwargs[str(key)] = request.args.get(key)
+
+    for key in request.form.to_dict().keys():
+        if key != 'pipeline_id' and key not in kwargs:
+            kwargs[str(key)] = request.form.get(key)
 
     def perform_callback():
       stage = pipeline_func_class.from_id(pipeline_id)
@@ -2858,11 +2849,15 @@ class _CallbackHandler(webapp.RequestHandler):
     else:
       callback_result = perform_callback()
 
+    resp = make_response()
+
     if callback_result is not None:
       status_code, content_type, content = callback_result
-      self.response.set_status(status_code)
-      self.response.headers['Content-Type'] = content_type
-      self.response.out.write(content)
+      resp.status_code = status_code
+      resp.headers['Content-Type'] = content_type
+      resp.set_data(content)
+
+    return resp
 
 
 ################################################################################
@@ -3319,5 +3314,5 @@ def create_handlers_map(prefix='.*'):
       (prefix + '/rpc/tree', status_ui._TreeStatusHandler),
       (prefix + '/rpc/class_paths', status_ui._ClassPathListHandler),
       (prefix + '/rpc/list', status_ui._RootListHandler),
-      (prefix + '(/.+)', status_ui._StatusUiHandler),
+      (prefix + '/<path:resource>', status_ui._StatusUiHandler),
       ]

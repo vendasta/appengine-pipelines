@@ -315,7 +315,7 @@ class OutputlessPipeline(pipeline.Pipeline):
 class AsyncOutputlessPipeline(pipeline.Pipeline):
   """Pipeline that outputs nothing."""
 
-  async = True
+  async_ = True
 
   def run(self):
     self.complete()
@@ -324,7 +324,7 @@ class AsyncOutputlessPipeline(pipeline.Pipeline):
 class AsyncCancellable(pipeline.Pipeline):
   """Pipeline that can be cancelled."""
 
-  async = True
+  async_ = True
 
   def run(self):
     self.complete()
@@ -587,7 +587,7 @@ class PipelineTest(TestBase):
     other = pipeline.Pipeline.from_id(stage.pipeline_id)
     self.assertTrue(isinstance(other, AsyncOutputlessPipeline))
     self.assertTrue(type(other) is not pipeline.Pipeline)
-    self.assertTrue(other.async)  # Class variables preserved
+    self.assertTrue(other.async_)  # Class variables preserved
 
   def testFromIdCannotFindOriginalClass(self):
     """Tests when from_id() cannot find the original class."""
@@ -2190,7 +2190,7 @@ class DumbSync(pipeline.Pipeline):
 class DumbAsync(pipeline.Pipeline):
   """A dumb pipeline that's asynchronous."""
 
-  async = True
+  async_ = True
 
   def run(self):
     self.complete()
@@ -2261,7 +2261,7 @@ class AbortsOnRun(pipeline.Pipeline):
 class AsyncCannotAbort(pipeline.Pipeline):
   """An async pipeline that cannot be aborted once active."""
 
-  async = True
+  async_ = True
 
   def run(self):
     pass
@@ -2278,7 +2278,7 @@ class AbortAfterYield(pipeline.Pipeline):
 class AsyncCanAbort(pipeline.Pipeline):
   """An async pipeline that cannot be aborted once active."""
 
-  async = True
+  async_ = True
 
   def run(self):
     pass
@@ -3090,7 +3090,7 @@ class HandlersPrivateTest(TestBase):
 class InternalOnlyPipeline(pipeline.Pipeline):
   """Pipeline with internal-only callbacks."""
 
-  async = True
+  async_ = True
 
   def run(self):
     pass
@@ -3099,7 +3099,7 @@ class InternalOnlyPipeline(pipeline.Pipeline):
 class AdminOnlyPipeline(pipeline.Pipeline):
   """Pipeline with internal-only callbacks."""
 
-  async = True
+  async_ = True
   admin_callbacks = True
 
   def run(self):
@@ -3112,7 +3112,7 @@ class AdminOnlyPipeline(pipeline.Pipeline):
 class PublicPipeline(pipeline.Pipeline):
   """Pipeline with public callbacks."""
 
-  async = True
+  async_ = True
   public_callbacks = True
 
   def run(self):
@@ -3408,7 +3408,7 @@ class EchoSync(pipeline.Pipeline):
 class EchoAsync(pipeline.Pipeline):
   """Asynchronous pipeline that echos input."""
 
-  async = True
+  async_ = True
 
   def run(self, *args):
     self.get_callback_task(
@@ -3447,7 +3447,7 @@ class EchoParticularNamedSync(EchoNamedSync):
 class EchoNamedAsync(pipeline.Pipeline):
   """Asynchronous pipeline that echos named inputs to named outputs."""
 
-  async = True
+  async_ = True
 
   def run(self, **kwargs):
     self.get_callback_task(params=kwargs).add()
@@ -3472,7 +3472,7 @@ class EchoNamedHalfAsync(pipeline.Pipeline):
   finally complete.
   """
 
-  async = True
+  async_ = True
   output_names = ['one', 'two', 'three', 'four']
 
   def run(self, **kwargs):
@@ -3786,7 +3786,7 @@ class SyncForcesRetry(pipeline.Pipeline):
 class AsyncForcesRetry(pipeline.Pipeline):
   """Test when a synchronous pipeline raises the Retry exception."""
 
-  async = True
+  async_ = True
 
   def run(self):
     raise pipeline.Retry('We need to try this again')
@@ -3818,7 +3818,7 @@ class SyncRaiseAbort(pipeline.Pipeline):
 class AsyncRaiseAbort(pipeline.Pipeline):
   """Raises an abort signal in an asynchronous pipeline."""
 
-  async = True
+  async_ = True
 
   def run(self):
     raise pipeline.Abort('Gotta bail!')
@@ -3903,7 +3903,7 @@ class FunctionalTest(test_shared.TaskRunningMixin, TestBase):
   def testStartSync(self):
     """Tests starting and executing just a synchronous pipeline."""
     stage = EchoSync(1, 2, 3)
-    self.assertFalse(stage.async)
+    self.assertFalse(stage.async_)
     self.assertEqual((1, 2, 3), EchoSync(1, 2, 3).run(1, 2, 3))
     outputs = self.run_pipeline(stage)
     self.assertEqual([1, 2, 3], outputs.default.value)
@@ -3911,7 +3911,7 @@ class FunctionalTest(test_shared.TaskRunningMixin, TestBase):
   def testStartAsync(self):
     """Tests starting and executing an asynchronous pipeline."""
     stage = EchoAsync(1, 2, 3)
-    self.assertTrue(stage.async)
+    self.assertTrue(stage.async_)
     outputs = self.run_pipeline(stage)
     self.assertEqual([1, 2, 3], outputs.default.value)
 
@@ -3919,7 +3919,7 @@ class FunctionalTest(test_shared.TaskRunningMixin, TestBase):
     """Tests a synchronous pipeline with named outputs."""
     stage = EchoParticularNamedSync(
         one='red', two='blue', three='green', four='yellow')
-    self.assertFalse(stage.async)
+    self.assertFalse(stage.async_)
     outputs = self.run_pipeline(stage)
     self.assertEqual(None, outputs.default.value)
     self.assertEqual('red', outputs.one.value)
@@ -3931,7 +3931,7 @@ class FunctionalTest(test_shared.TaskRunningMixin, TestBase):
     """Tests an asynchronous pipeline with named outputs."""
     stage = EchoParticularNamedAsync(
         one='red', two='blue', three='green', four='yellow')
-    self.assertTrue(stage.async)
+    self.assertTrue(stage.async_)
     outputs = self.run_pipeline(stage)
     self.assertEqual(None, outputs.default.value)
     self.assertEqual('red', outputs.one.value)
@@ -4047,7 +4047,7 @@ class FunctionalTest(test_shared.TaskRunningMixin, TestBase):
   def testSyncMissingNamedOutput(self):
     """Tests when a sync pipeline does not output to a named output."""
     stage = EchoParticularNamedSync(one='red', two='blue', three='green')
-    self.assertFalse(stage.async)
+    self.assertFalse(stage.async_)
     self.assertRaises(pipeline.SlotNotFilledError, self.run_pipeline, stage)
 
   def testGeneratorNoChildrenMissingNamedOutput(self):
@@ -4061,7 +4061,7 @@ class FunctionalTest(test_shared.TaskRunningMixin, TestBase):
     """Tests when a strict sync pipeline outputs to an undeclared output."""
     stage = EchoParticularNamedSync(
         one='red', two='blue', three='green', four='yellow', other='stuff')
-    self.assertFalse(stage.async)
+    self.assertFalse(stage.async_)
     self.assertRaises(pipeline.SlotNotDeclaredError, self.run_pipeline, stage)
 
   def testGeneratorChildlessUndeclaredOutput(self):

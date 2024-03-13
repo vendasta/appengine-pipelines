@@ -24,13 +24,9 @@ __all__ = ["for_name",
 
 import datetime
 import inspect
+import json
 import logging
 import os
-
-try:
-  import json
-except ImportError:
-  import simplejson as json
 
 from google.appengine.ext import ndb
 

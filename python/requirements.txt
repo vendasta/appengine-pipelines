@@ -2,7 +2,7 @@
 appengine-python-standard==1.1.5
 keyrings.google-artifactregistry-auth==1.1.2
 twine==4.0.2
-GoogleAppEngineCloudStorageClient
 invoke
 gunicorn
 Flask
+google-cloud-storage

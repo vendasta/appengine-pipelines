@@ -322,7 +322,7 @@ class Log(pipeline.Pipeline):
     return Log(logging.CRITICAL, *args, **kwargs)
 
   def run(self, level, message, *args):
-    Log._log_method.__func__(level, message, *args)
+    Log._log_method(level, message, *args)
 
 
 class Delay(pipeline.Pipeline):
@@ -336,7 +336,7 @@ class Delay(pipeline.Pipeline):
     How long this delay waited.
   """
 
-  async = True
+  async_ = True
 
   def __init__(self, *args, **kwargs):
     if len(args) != 0 or len(kwargs) != 1 or list(kwargs.keys())[0] != 'seconds':
@@ -382,7 +382,7 @@ class EmailToContinue(pipeline.Pipeline):
   A random token is used to secure the asynchronous action.
   """
 
-  async = True
+  async_ = True
   public_callbacks = True
 
   _email_message = mail.EmailMessage
@@ -416,7 +416,7 @@ class EmailToContinue(pipeline.Pipeline):
         'approve_url': cgi.escape(approve_url),
         'disapprove_url': cgi.escape(disapprove_url),
       }
-    EmailToContinue._email_message.__func__(**mail_args).send()
+    EmailToContinue._email_message(**mail_args).send()
 
   def run_test(self, **kwargs):
     self.run(**kwargs)

@@ -19,7 +19,5 @@ setuptools.setup(
     include_package_data=True,
     # Exclude these files from installation.
     exclude_package_data={"": ["README"]},
-    install_requires=[
-      "GoogleAppEngineCloudStorageClient >= 1.9.22",
-      ],
+    install_requires=[],
 )

@@ -4,11 +4,11 @@ runtime: python39
 api_version: 1
 
 handlers:
-- url: /_ah/pipeline(/.*)?
-  script: pipeline/handlers.py
-
 - url: /static
   static_dir: static
+
+- url: /_ah/pipeline(/.*)?
+  script: main.py
 
 - url: .*
   login: required
