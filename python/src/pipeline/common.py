@@ -16,12 +16,11 @@
 
 """Common Pipelines for easy reuse."""
 
-import cgi
+import html
 import logging
 import random
 
-from google.appengine.api import mail
-from google.appengine.api import taskqueue
+from google.appengine.api import mail, taskqueue
 
 from . import pipeline
 
@@ -413,8 +412,8 @@ class EmailToContinue(pipeline.Pipeline):
     }
     if 'html' in mail_args:
       mail_args['html'] = mail_args['html'] % {
-        'approve_url': cgi.escape(approve_url),
-        'disapprove_url': cgi.escape(disapprove_url),
+        'approve_url': html.escape(approve_url),
+        'disapprove_url': html.escape(disapprove_url),
       }
     EmailToContinue._email_message(**mail_args).send()
 

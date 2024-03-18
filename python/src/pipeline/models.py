@@ -16,13 +16,9 @@
 
 """Datastore models used by the Google App Engine Pipeline API."""
 
-from google.appengine.ext import db
-from google.appengine.ext import blobstore
+import json
 
-try:
-  import json
-except ImportError:
-  import simplejson as json
+from google.appengine.ext import blobstore, db
 
 # Relative imports
 from . import util
@@ -71,8 +67,8 @@ class _PipelineRecord(db.Model):
 
   # One of these two will be set, depending on the size of the params.
   params_text = db.TextProperty(name='params')
-  params_blob = blobstore.BlobReferenceProperty(
-      name='params_blob', indexed=False)
+  params_blob = blobstore.BlobReferenceProperty(name='params_blob', indexed=False)
+  params_gcs = db.StringProperty(name='params_gcs', indexed=False)
 
   status = db.StringProperty(choices=(WAITING, RUN, DONE, ABORTED),
                              default=WAITING)
@@ -95,11 +91,15 @@ class _PipelineRecord(db.Model):
   @property
   def params(self):
     """Returns the dictionary of parameters for this Pipeline."""
+    from .storage import read_blob_gcs
+
     if hasattr(self, '_params_decoded'):
       return self._params_decoded
 
     if self.params_blob is not None:
       value_encoded = self.params_blob.open().read()
+    elif self.params_gcs is not None:
+      value_encoded = read_blob_gcs(self.params_gcs)
     else:
       value_encoded = self.params_text
 
@@ -141,8 +141,8 @@ class _SlotRecord(db.Model):
 
   # One of these two will be set, depending on the size of the value.
   value_text = db.TextProperty(name='value')
-  value_blob = blobstore.BlobReferenceProperty(
-      name='value_blob', indexed=False)
+  value_blob = blobstore.BlobReferenceProperty(name='value_blob', indexed=False)
+  value_gcs = db.StringProperty(name='value_gcs', indexed=False)
 
   status = db.StringProperty(choices=(FILLED, WAITING), default=WAITING,
                              indexed=False)
@@ -155,11 +155,15 @@ class _SlotRecord(db.Model):
   @property
   def value(self):
     """Returns the value of this Slot."""
+    from .storage import read_blob_gcs
+
     if hasattr(self, '_value_decoded'):
       return self._value_decoded
 
     if self.value_blob is not None:
       encoded_value = self.value_blob.open().read()
+    elif self.value_gcs is not None:
+      encoded_value = read_blob_gcs(self.value_gcs)
     else:
       encoded_value = self.value_text
 

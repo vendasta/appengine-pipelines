@@ -17,17 +17,17 @@
 """Tests for common Pipelines."""
 
 import logging
+import os
 import sys
 import unittest
 
 # Fix up paths for running tests.
-sys.path.insert(0, '../src/')
-
+sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 from pipeline import common
 from pipeline import pipeline
-from . import test_shared
-from . import testutil
+import test_shared
+import testutil
 
 
 class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest.TestCase):

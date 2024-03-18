@@ -8,7 +8,7 @@ import sys
 import unittest
 
 # Fix up paths for running tests.
-sys.path.insert(0, "../src/")
+sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 from pipeline import util
 
