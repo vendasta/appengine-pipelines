@@ -16,14 +16,13 @@
 
 """Common Pipelines for easy reuse."""
 
-import cgi
+import html
 import logging
 import random
 
-from google.appengine.api import mail
-from google.appengine.api import taskqueue
+from google.appengine.api import mail, taskqueue
 
-import pipeline
+from . import pipeline
 
 
 class Return(pipeline.Pipeline):
@@ -322,7 +321,7 @@ class Log(pipeline.Pipeline):
     return Log(logging.CRITICAL, *args, **kwargs)
 
   def run(self, level, message, *args):
-    Log._log_method.im_func(level, message, *args)
+    Log._log_method(level, message, *args)
 
 
 class Delay(pipeline.Pipeline):
@@ -336,10 +335,10 @@ class Delay(pipeline.Pipeline):
     How long this delay waited.
   """
 
-  async = True
+  async_ = True
 
   def __init__(self, *args, **kwargs):
-    if len(args) != 0 or len(kwargs) != 1 or kwargs.keys()[0] != 'seconds':
+    if len(args) != 0 or len(kwargs) != 1 or list(kwargs.keys())[0] != 'seconds':
       raise TypeError('Delay takes one keyword parameter, "seconds".')
     pipeline.Pipeline.__init__(self, *args, **kwargs)
 
@@ -382,7 +381,7 @@ class EmailToContinue(pipeline.Pipeline):
   A random token is used to secure the asynchronous action.
   """
 
-  async = True
+  async_ = True
   public_callbacks = True
 
   _email_message = mail.EmailMessage
@@ -413,10 +412,10 @@ class EmailToContinue(pipeline.Pipeline):
     }
     if 'html' in mail_args:
       mail_args['html'] = mail_args['html'] % {
-        'approve_url': cgi.escape(approve_url),
-        'disapprove_url': cgi.escape(disapprove_url),
+        'approve_url': html.escape(approve_url),
+        'disapprove_url': html.escape(disapprove_url),
       }
-    EmailToContinue._email_message.im_func(**mail_args).send()
+    EmailToContinue._email_message(**mail_args).send()
 
   def run_test(self, **kwargs):
     self.run(**kwargs)

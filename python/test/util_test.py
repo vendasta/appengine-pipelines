@@ -8,7 +8,7 @@ import sys
 import unittest
 
 # Fix up paths for running tests.
-sys.path.insert(0, "../src/")
+sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 from pipeline import util
 
@@ -23,13 +23,13 @@ class JsonSerializationTest(unittest.TestCase):
     obj = {"a": 1, "b": [{"c": "d"}], "e": now}
     new_obj = util.json.loads(util.json.dumps(
         obj, cls=util.JsonEncoder), cls=util.JsonDecoder)
-    self.assertEquals(obj, new_obj)
+    self.assertEqual(obj, new_obj)
 
 
 class GetTaskTargetTest(unittest.TestCase):
 
   def setUp(self):
-    super(GetTaskTargetTest, self).setUp()
+    super().setUp()
     os.environ["CURRENT_VERSION_ID"] = "v7.1"
     os.environ["CURRENT_MODULE_ID"] = "foo-module"
 

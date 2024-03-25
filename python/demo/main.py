@@ -16,18 +16,20 @@
 
 """Demo Pipeline API application."""
 
-from __future__ import with_statement
+
 
 import logging
 import os
+import sys
 import time
 
-from google.appengine.api import mail
-from google.appengine.api import users
+from flask import Flask, render_template, request, redirect
+from flask.views import MethodView
+from google.appengine.api import mail, users
 from google.appengine.ext import db
-from google.appengine.ext import webapp
-from google.appengine.ext.webapp import template
-from google.appengine.ext.webapp import util
+from google.appengine.api import wrap_wsgi_app
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 import pipeline
 from pipeline import common
@@ -45,7 +47,7 @@ class LongCount(pipeline.Pipeline):
     count = 0
     while True:
       query = db.GqlQuery(
-          'SELECT * FROM %s WHERE %s = :1' % (entity_kind, property_name),
+          'SELECT * FROM {} WHERE {} = :1'.format(entity_kind, property_name),
           value.lower(), key_only=True, cursor=cursor)
       result = query.fetch(1000)
       count += len(result)
@@ -101,7 +103,7 @@ class EmailCountReport(pipeline.Pipeline):
     logging.info('Email body is:\n%s', rendered)
 
     # Works in production, I swear!
-    sender = '%s@%s.appspotmail.com' % (os.environ['APPLICATION_ID'],
+    sender = '{}@{}.appspotmail.com'.format(os.environ['APPLICATION_ID'],
                                         os.environ['APPLICATION_ID'])
     try:
       mail.send_mail(
@@ -142,40 +144,40 @@ class GuestbookPost(db.Model):
   write_time = db.DateTimeProperty(auto_now_add=True)
 
 
-class StartPipelineHandler(webapp.RequestHandler):
+class StartPipelineHandler(MethodView):
   def get(self):
-    self.response.out.write(template.render('start.html', {}))
+    return render_template('start.html')
 
   def post(self):
-    colors = [color for color in self.request.get_all('color') if color]
+    colors = [color for color in request.form.getlist('color') if color]
     job = CountReport(
         users.get_current_user().email(),
         GuestbookPost.kind(),
         'color',
         *colors)
     job.start()
-    self.redirect('/_ah/pipeline/status?root=%s' % job.pipeline_id)
+    return redirect('/_ah/pipeline/status?root=%s' % job.pipeline_id)
 
 
-class MainHandler(webapp.RequestHandler):
+class MainHandler(MethodView):
   def get(self):
-    context = {'posts': GuestbookPost.all().order('-write_time').fetch(100)}
-    self.response.out.write(template.render('guestbook.html', context))
+    posts = GuestbookPost.all().order('-write_time').fetch(100)
+    return render_template('guestbook.html', posts=posts)
 
   def post(self):
-    color = self.request.get('color')
+    color = request.form.get('color')
     if color:
       GuestbookPost(color=color.lower()).put()
-    self.redirect('/')
+    return redirect('/')
 
 
-def main():
-  application = webapp.WSGIApplication([
-      (r'/', MainHandler),
-      (r'/pipeline', StartPipelineHandler),
-  ], debug=True)
-  util.run_wsgi_app(application)
+app = Flask(__name__)
 
+app.wsgi_app = wrap_wsgi_app(app.wsgi_app, use_legacy_context_mode=True)
 
-if __name__ == '__main__':
-    main()
+app.add_url_rule('/', view_func=MainHandler.as_view('main'))
+app.add_url_rule('/pipeline', view_func=StartPipelineHandler.as_view('pipeline'))
+
+routes = pipeline.create_handlers_map('/_ah/pipeline')
+for route, handler in routes:
+  app.add_url_rule(route, view_func=handler.as_view(route.lstrip('/')))

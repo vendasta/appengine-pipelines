@@ -16,22 +16,19 @@
 
 """Shared code used by Pipeline API tests."""
 
-import StringIO
 import base64
-import cgi
-import datetime
 import calendar
+import datetime
 import logging
 import random
 import re
-import sys
-import wsgiref.handlers
+import urllib
+import urllib.parse
 
+from flask import Flask
 from google.appengine.api import apiproxy_stub_map
-from google.appengine.ext import webapp
 
 import pipeline
-from pipeline import models
 
 # For convenience.
 _PipelineRecord = pipeline.models._PipelineRecord
@@ -46,7 +43,7 @@ def get_tasks(queue_name='default'):
   """
   taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
 
-  stub_globals = taskqueue_stub.GetTasks.func_globals
+  stub_globals = taskqueue_stub.GetTasks.__globals__
   old_format = stub_globals['_FormatEta']
   # Yes-- this is a vicious hack to have the task queue stub return the
   # ETA of tasks as datetime instances instead of text strings.
@@ -62,7 +59,7 @@ def get_tasks(queue_name='default'):
     for header, value in task['headers']:
       if (header == 'content-type' and
           value == 'application/x-www-form-urlencoded'):
-        task['params'] = cgi.parse_qs(base64.b64decode(task['body']))
+        task['params'] = urllib.parse.parse_qs(base64.b64decode(task['body']).decode('latin1'))
         break
     adjusted_task_list.append(task)
   return adjusted_task_list
@@ -77,45 +74,21 @@ def delete_tasks(task_list, queue_name='default'):
     # some tasks to run multiple times in tests if barriers fire twice.
     taskqueue_stub._GetGroup().GetQueue(queue_name).Delete(task['name'])
 
-
-def create_handler(handler_class, method, url, headers={}, input_body=''):
-  """Creates a webapp.RequestHandler instance and request/response objects."""
-  environ = {
-      'wsgi.input': StringIO.StringIO(input_body),
-      'wsgi.errors': sys.stderr,
-      'REQUEST_METHOD': method,
-      'SCRIPT_NAME': '',
-      'PATH_INFO': url,
-      'CONTENT_TYPE': headers.pop('content-type', ''),
-      'CONTENT_LENGTH': headers.pop('content-length', ''),
-  }
-  if method == 'GET':
-    environ['PATH_INFO'], environ['QUERY_STRING'] = (
-        (url.split('?', 1) + [''])[:2])
-  for name, value in headers.iteritems():
-    fixed_name = name.replace('-', '_').upper()
-    environ['HTTP_' + fixed_name] = value
-
-  handler = handler_class()
-  request = webapp.Request(environ)
-  response = webapp.Response()
-  handler.initialize(request, response)
-  return handler
-
 def utc_to_local(utc_datetime):
     timestamp = calendar.timegm(utc_datetime.timetuple())
     local_datetime = datetime.datetime.fromtimestamp(timestamp)
     return local_datetime.replace(microsecond=utc_datetime.microsecond)
 
-class TaskRunningMixin(object):
+class TaskRunningMixin:
   """A mix-in that runs a Pipeline using tasks."""
 
   def setUp(self):
     """Sets up the test harness."""
-    super(TaskRunningMixin, self).setUp()
+    super().setUp()
     self.taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
     self.queue_name = 'default'
     self.test_mode = False
+    self.app = Flask(__name__)
 
   def tearDown(self):
     """Make sure all tasks are deleted."""
@@ -129,42 +102,31 @@ class TaskRunningMixin(object):
     return task_list
 
   def run_task(self, task):
-    """Runs the given task against the pipeline handlers."""
-    name = task['name']
-    method = task['method']
-    url = task['url']
-    headers = dict(task['headers'])
+      """Runs the given task against the pipeline handlers."""
+      name = task['name']
+      method = task['method']
+      url = task['url']
+      headers = dict(task['headers'])
+      data = base64.b64decode(task['body'])
 
-    environ = {
-        'wsgi.input': StringIO.StringIO(base64.b64decode(task['body'])),
-        'wsgi.errors': sys.stderr,
-        'REQUEST_METHOD': method,
-        'SCRIPT_NAME': '',
-        'PATH_INFO': url,
-        'CONTENT_TYPE': headers.get('content-type', ''),
-        'CONTENT_LENGTH': headers.get('content-length', ''),
-        'HTTP_X_APPENGINE_TASKNAME': name,
-        'HTTP_X_APPENGINE_QUEUENAME': self.queue_name,
-    }
-    match_url = url
-    if method == 'GET':
-      environ['PATH_INFO'], environ['QUERY_STRING'] = (
-          (url.split('?', 1) + [''])[:2])
-      match_url = environ['PATH_INFO']
+      headers.update({
+        'X-AppEngine-TaskName': name,
+        'X-AppEngine-QueueName': self.queue_name,
+      })
 
-    logging.debug('Executing "%s %s" name="%s"', method, url, name)
-    for pattern, handler_class in pipeline.create_handlers_map():
-      the_match = re.match('^%s$' % pattern, match_url)
-      if the_match:
-        break
-    else:
-      self.fail('No matching handler for "%s %s"' % (method, url))
+      match_url = url
+      for pattern, handler_class in pipeline.create_handlers_map():
+        the_match = re.match('^%s$' % pattern, match_url)
+        if the_match:
+          break
+      else:
+        self.fail('No matching handler for "%s %s"' % (method, url))
 
-    handler = handler_class()
-    request = webapp.Request(environ)
-    response = webapp.Response()
-    handler.initialize(request, response)
-    getattr(handler, method.lower())(*the_match.groups())
+      handler = handler_class()
+
+      logging.debug('Executing "%s %s" name="%s"', method, url, name)
+      with self.app.test_request_context(url, method=method, data=data, headers=headers):
+        getattr(handler, method.lower())(*the_match.groups())
 
   def run_pipeline(self, pipeline, *args, **kwargs):
     """Runs the pipeline and returns outputs."""
@@ -184,23 +146,23 @@ class TaskRunningMixin(object):
 
     if require_slots_filled:
       for slot_record in _SlotRecord.all():
-        self.assertEquals(_SlotRecord.FILLED, slot_record.status,
+        self.assertEqual(_SlotRecord.FILLED, slot_record.status,
                           '_SlotRecord = %r' % slot_record.key())
       for barrier_record in _BarrierRecord.all():
-        self.assertEquals(_BarrierRecord.FIRED, barrier_record.status,
+        self.assertEqual(_BarrierRecord.FIRED, barrier_record.status,
                           '_BarrierRecord = %r' % barrier_record.key())
       for pipeline_record in _PipelineRecord.all():
-        self.assertEquals(_PipelineRecord.DONE, pipeline_record.status,
+        self.assertEqual(_PipelineRecord.DONE, pipeline_record.status,
                           '_PipelineRecord = %r' % pipeline_record.key())
 
     return pipeline.__class__.from_id(pipeline.pipeline_id).outputs
 
 
-class TestModeMixin(object):
+class TestModeMixin:
   """A mix-in that runs a pipeline using the test mode."""
 
   def setUp(self):
-    super(TestModeMixin, self).setUp()
+    super().setUp()
     self.test_mode = True
 
   def run_pipeline(self, pipeline, *args, **kwargs):

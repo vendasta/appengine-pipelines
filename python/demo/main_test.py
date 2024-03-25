@@ -25,7 +25,7 @@ sys.path.insert(0, '../src/')
 
 from appengine_pipeline.test import testutil
 
-import main
+from . import main
 
 
 class CountReportTest(unittest.TestCase):
@@ -44,7 +44,7 @@ class CountReportTest(unittest.TestCase):
         'color',
         'red', 'green', 'blue')
     job.start_test()
-    self.assertEquals(4, job.outputs.default.value)
+    self.assertEqual(4, job.outputs.default.value)
 
 
 if __name__ == '__main__':

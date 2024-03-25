@@ -16,16 +16,12 @@
 
 """Datastore models used by the Google App Engine Pipeline API."""
 
-from google.appengine.ext import db
-from google.appengine.ext import blobstore
+import json
 
-try:
-  import json
-except ImportError:
-  import simplejson as json
+from google.appengine.ext import blobstore, db
 
 # Relative imports
-import util
+from . import util
 
 
 class _PipelineRecord(db.Model):
@@ -71,8 +67,8 @@ class _PipelineRecord(db.Model):
 
   # One of these two will be set, depending on the size of the params.
   params_text = db.TextProperty(name='params')
-  params_blob = blobstore.BlobReferenceProperty(
-      name='params_blob', indexed=False)
+  params_blob = blobstore.BlobReferenceProperty(name='params_blob', indexed=False)
+  params_gcs = db.StringProperty(name='params_gcs', indexed=False)
 
   status = db.StringProperty(choices=(WAITING, RUN, DONE, ABORTED),
                              default=WAITING)
@@ -95,11 +91,15 @@ class _PipelineRecord(db.Model):
   @property
   def params(self):
     """Returns the dictionary of parameters for this Pipeline."""
+    from .storage import read_blob_gcs
+
     if hasattr(self, '_params_decoded'):
       return self._params_decoded
 
     if self.params_blob is not None:
       value_encoded = self.params_blob.open().read()
+    elif self.params_gcs is not None:
+      value_encoded = read_blob_gcs(self.params_gcs)
     else:
       value_encoded = self.params_text
 
@@ -108,7 +108,7 @@ class _PipelineRecord(db.Model):
       kwargs = value.get('kwargs')
       if kwargs:
         adjusted_kwargs = {}
-        for arg_key, arg_value in kwargs.iteritems():
+        for arg_key, arg_value in list(kwargs.items()):
           # Python only allows non-unicode strings as keyword arguments.
           adjusted_kwargs[str(arg_key)] = arg_value
         value['kwargs'] = adjusted_kwargs
@@ -141,8 +141,8 @@ class _SlotRecord(db.Model):
 
   # One of these two will be set, depending on the size of the value.
   value_text = db.TextProperty(name='value')
-  value_blob = blobstore.BlobReferenceProperty(
-      name='value_blob', indexed=False)
+  value_blob = blobstore.BlobReferenceProperty(name='value_blob', indexed=False)
+  value_gcs = db.StringProperty(name='value_gcs', indexed=False)
 
   status = db.StringProperty(choices=(FILLED, WAITING), default=WAITING,
                              indexed=False)
@@ -155,11 +155,15 @@ class _SlotRecord(db.Model):
   @property
   def value(self):
     """Returns the value of this Slot."""
+    from .storage import read_blob_gcs
+
     if hasattr(self, '_value_decoded'):
       return self._value_decoded
 
     if self.value_blob is not None:
       encoded_value = self.value_blob.open().read()
+    elif self.value_gcs is not None:
+      encoded_value = read_blob_gcs(self.value_gcs)
     else:
       encoded_value = self.value_text
 

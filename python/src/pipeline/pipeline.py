@@ -26,47 +26,31 @@ __all__ = [
     'set_enforce_auth',
 ]
 
+import calendar
 import datetime
 import hashlib
 import itertools
+import json
 import logging
 import os
-import posixpath
 import pprint
 import re
 import sys
 import threading
-import time
-import urllib
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 
-from google.appengine.api import mail
-from google.appengine.api import app_identity
-from google.appengine.api import users
-from google.appengine.api import taskqueue
-from google.appengine.ext import blobstore
+from flask import abort, make_response, request
+from flask.views import MethodView
+from google.appengine.api import mail, taskqueue, users
 from google.appengine.ext import db
-from google.appengine.ext import webapp
-
-# pylint: disable=g-import-not-at-top
-# TODO(user): Cleanup imports if/when cloudstorage becomes part of runtime.
-try:
-  # Check if the full cloudstorage package exists. The stub part is in runtime.
-  import cloudstorage
-  if hasattr(cloudstorage, "_STUB"):
-    cloudstorage = None
-except ImportError:
-  pass  # CloudStorage library not available
-
-try:
-  import json
-except ImportError:
-  import simplejson as json
 
 # Relative imports
-import models
-import status_ui
-import util as mr_util
+from . import models, status_ui
+from . import util as mr_util
+from .storage import write_json_gcs
 
 # pylint: disable=g-bad-name
 # pylint: disable=protected-access
@@ -329,7 +313,7 @@ class PipelineFuture(object):
       UnexpectedPipelineError when resolve_outputs is True and any of the output
       slots could not be retrived from the Datastore.
     """
-    for name, slot_key in already_defined.iteritems():
+    for name, slot_key in list(already_defined.items()):
       if not isinstance(slot_key, db.Key):
         slot_key = db.Key(slot_key)
 
@@ -346,9 +330,9 @@ class PipelineFuture(object):
         slot._exists = True
 
     if resolve_outputs:
-      slot_key_dict = dict((s.key, s) for s in self._output_dict.itervalues())
-      all_slots = db.get(slot_key_dict.keys())
-      for slot, slot_record in zip(slot_key_dict.itervalues(), all_slots):
+      slot_key_dict = dict((s.key, s) for s in list(self._output_dict.values()))
+      all_slots = db.get(list(slot_key_dict.keys()))
+      for slot, slot_record in zip(iter(list(slot_key_dict.values())), all_slots):
         if slot_record is None:
           raise UnexpectedPipelineError(
               'Inherited output named "%s" for pipeline class "%s" is '
@@ -390,7 +374,7 @@ class ClassProperty(object):
     return self.method(obj)
 
 
-class Pipeline(object):
+class Pipeline(object, metaclass=_PipelineMeta):
   """A Pipeline function-object that performs operations and has a life cycle.
 
   Class properties (to be overridden by sub-classes):
@@ -422,10 +406,8 @@ class Pipeline(object):
     current_attempt: The current attempt being tried for this pipeline.
   """
 
-  __metaclass__ = _PipelineMeta
-
   # To be set by sub-classes
-  async = False
+  async_ = False
   output_names = []
   public_callbacks = False
   admin_callbacks = False
@@ -563,9 +545,9 @@ class Pipeline(object):
     pipeline_record = _pipeline_record
 
     # Support pipeline IDs and idempotence_keys that are not unicode.
-    if not isinstance(pipeline_id, unicode):
+    if not isinstance(pipeline_id, str):
       try:
-        pipeline_id = pipeline_id.encode('utf-8')
+        pipeline_id = pipeline_id.decode('utf-8')
       except UnicodeDecodeError:
         pipeline_id = hashlib.sha1(pipeline_id).hexdigest()
 
@@ -578,7 +560,7 @@ class Pipeline(object):
 
     try:
       pipeline_func_class = mr_util.for_name(pipeline_record.class_path)
-    except ImportError, e:
+    except ImportError as e:
       logging.warning('Tried to find Pipeline %s#%s, but class could '
                       'not be found. Using default Pipeline class instead.',
                       pipeline_record.class_path, pipeline_id)
@@ -650,9 +632,9 @@ class Pipeline(object):
     """
     if not idempotence_key:
       idempotence_key = uuid.uuid4().hex
-    elif not isinstance(idempotence_key, unicode):
+    elif not isinstance(idempotence_key, str):
       try:
-        idempotence_key.encode('utf-8')
+        idempotence_key.decode('utf-8')
       except UnicodeDecodeError:
         idempotence_key = hashlib.sha1(idempotence_key).hexdigest()
 
@@ -667,7 +649,7 @@ class Pipeline(object):
     except Error:
       # Pass through exceptions that originate in this module.
       raise
-    except Exception, e:
+    except Exception as e:
       # Re-type any exceptions that were raised in dependent methods.
       raise PipelineSetupError('Error starting %s#%s: %s' % (
           self, idempotence_key, str(e)))
@@ -703,7 +685,7 @@ class Pipeline(object):
       True if the Pipeline should be retried, False if it cannot be cancelled
       mid-flight for some reason.
     """
-    if not self.async:
+    if not self.async_:
       raise UnexpectedPipelineError(
           'May only call retry() method for asynchronous pipelines.')
     if self.try_cancel():
@@ -728,7 +710,7 @@ class Pipeline(object):
     """
     # TODO: Use thread-local variable to enforce that this is not called
     # while a pipeline is executing in the current thread.
-    if (self.async and self._root_pipeline_key == self._pipeline_key and
+    if (self.async_ and self._root_pipeline_key == self._pipeline_key and
         not self.try_cancel()):
       # Handle the special case where the root pipeline is async and thus
       # cannot be aborted outright.
@@ -749,7 +731,7 @@ class Pipeline(object):
       UnexpectedPipelineError if the Slot no longer exists. SlotNotDeclaredError
       if trying to output to a slot that was not declared ahead of time.
     """
-    if isinstance(name_or_slot, basestring):
+    if isinstance(name_or_slot, str):
       slot = getattr(self.outputs, name_or_slot)
     elif isinstance(name_or_slot, Slot):
       slot = name_or_slot
@@ -803,14 +785,14 @@ class Pipeline(object):
       if status_links:
         # Alphabeticalize the list.
         status_record.link_names = sorted(
-            db.Text(s) for s in status_links.iterkeys())
+            db.Text(s) for s in list(status_links.keys()))
         status_record.link_urls = [
             db.Text(status_links[name]) for name in status_record.link_names]
 
       status_record.status_time = datetime.datetime.utcnow()
 
       status_record.put()
-    except Exception, e:
+    except Exception as e:
       raise PipelineRuntimeError('Could not set status for %s#%s: %s' %
           (self, self.pipeline_id, str(e)))
 
@@ -827,7 +809,7 @@ class Pipeline(object):
     # TODO: Enforce that all outputs expected by this async pipeline were
     # filled before this complete() function was called. May required all
     # async functions to declare their outputs upfront.
-    if not self.async:
+    if not self.async_:
       raise UnexpectedPipelineError(
           'May only call complete() method for asynchronous pipelines.')
     self._context.fill_slot(
@@ -844,11 +826,11 @@ class Pipeline(object):
       UnexpectedPipelineError if this is invoked on pipeline that is not async.
     """
     # TODO: Support positional parameters.
-    if not self.async:
+    if not self.async_:
       raise UnexpectedPipelineError(
           'May only call get_callback_url() method for asynchronous pipelines.')
     kwargs['pipeline_id'] = self._pipeline_key.name()
-    params = urllib.urlencode(sorted(kwargs.items()))
+    params = urllib.parse.urlencode(sorted(kwargs.items()))
     return '%s/callback?%s' % (self.base_path, params)
 
   def get_callback_task(self, *args, **kwargs):
@@ -863,7 +845,7 @@ class Pipeline(object):
     Returns:
       A taskqueue.Task instance that must be enqueued by the caller.
     """
-    if not self.async:
+    if not self.async_:
       raise UnexpectedPipelineError(
           'May only call get_callback_task() method for asynchronous pipelines.')
 
@@ -979,7 +961,7 @@ The Pipeline API
           'been scheduled for execution.')
 
     ALLOWED = ('backoff_seconds', 'backoff_factor', 'max_attempts', 'target')
-    for name, value in kwargs.iteritems():
+    for name, value in list(kwargs.items()):
       if name not in ALLOWED:
         raise TypeError('Unexpected keyword: %s=%r' % (name, value))
       setattr(self, name, value)
@@ -1058,7 +1040,7 @@ The Pipeline API
     # defined in the same file as the handler will get __module__ set to
     # __main__. Thus we need to find out its real fully qualified path.
     if cls.__module__ == '__main__':
-      for name, module in module_dict.items():
+      for name, module in list(module_dict.items()):
         if name == '__main__':
           continue
         found = getattr(module, cls.__name__, None)
@@ -1237,45 +1219,6 @@ def _short_repr(obj):
     return '%s... (%d bytes)' % (stringified[:200], len(stringified))
   return stringified
 
-
-def _write_json_blob(encoded_value, pipeline_id=None):
-  """Writes a JSON encoded value to a Cloud Storage File.
-
-  This function will store the blob in a GCS file in the default bucket under
-  the appengine_pipeline directory. Optionally using another directory level
-  specified by pipeline_id
-  Args:
-    encoded_value: The encoded JSON string.
-    pipeline_id: A pipeline id to segment files in Cloud Storage, if none,
-      the file will be created under appengine_pipeline
-
-  Returns:
-    The blobstore.BlobKey for the file that was created.
-  """
-
-  default_bucket = app_identity.get_default_gcs_bucket_name()
-  if default_bucket is None:
-    raise Exception(
-      "No default cloud storage bucket has been set for this application. "
-      "This app was likely created before v1.9.0, please see: "
-      "https://cloud.google.com/appengine/docs/php/googlestorage/setup")
-
-  path_components = ['/', default_bucket, "appengine_pipeline"]
-  if pipeline_id:
-    path_components.append(pipeline_id)
-  path_components.append(uuid.uuid4().hex)
-  # Use posixpath to get a / even if we're running on windows somehow
-  file_name = posixpath.join(*path_components)
-  with cloudstorage.open(file_name, 'w', content_type='application/json') as f:
-    for start_index in xrange(0, len(encoded_value), _MAX_JSON_SIZE):
-      end_index = start_index + _MAX_JSON_SIZE
-      f.write(encoded_value[start_index:end_index])
-
-  key_str = blobstore.create_gs_key("/gs" + file_name)
-  logging.debug("Created blob for filename = %s gs_key = %s", file_name, key_str)
-  return blobstore.BlobKey(key_str)
-
-
 def _dereference_args(pipeline_name, args, kwargs):
   """Dereference a Pipeline's arguments that are slots, validating them.
 
@@ -1299,7 +1242,7 @@ def _dereference_args(pipeline_name, args, kwargs):
     UnexpectedPipelineError if an unknown parameter type was passed.
   """
   lookup_slots = set()
-  for arg in itertools.chain(args, kwargs.itervalues()):
+  for arg in itertools.chain(args, iter(list(kwargs.values()))):
     if arg['type'] == 'slot':
       lookup_slots.add(db.Key(arg['slot_key']))
 
@@ -1321,7 +1264,7 @@ def _dereference_args(pipeline_name, args, kwargs):
       raise UnexpectedPipelineError('Unknown parameter type: %r' % current_arg)
 
   kwarg_dict = {}
-  for key, current_arg in kwargs.iteritems():
+  for key, current_arg in list(kwargs.items()):
     if current_arg['type'] == 'slot':
       kwarg_dict[key] = slot_dict[db.Key(current_arg['slot_key'])]
     elif current_arg['type'] == 'value':
@@ -1346,7 +1289,7 @@ def _generate_args(pipeline, future, queue_name, base_path):
     base_path: Relative URL for pipeline URL handlers.
 
   Returns:
-    Tuple (dependent_slots, output_slot_keys, params_text, params_blob) where:
+    Tuple (dependent_slots, output_slot_keys, params_text, params_gcs) where:
       dependent_slots: List of db.Key instances of _SlotRecords on which
         this pipeline will need to block before execution (passed to
         create a _BarrierRecord for running the pipeline).
@@ -1356,9 +1299,9 @@ def _generate_args(pipeline, future, queue_name, base_path):
       params_text: JSON dictionary of pipeline parameters to be serialized and
         saved in a corresponding _PipelineRecord. Will be None if the params are
         too big and must be saved in a blob instead.
-      params_blob: JSON dictionary of pipeline parameters to be serialized and
-        saved in a Blob file, and then attached to a _PipelineRecord. Will be
-        None if the params data size was small enough to fit in the entity.
+      params_gcs: JSON dictionary of pipeline parameters to be serialized and
+        saved in a cloud storage file, and then attached to a _PipelineRecord. 
+        Will be None if the params data size was small enough to fit in the entity.
   """
   params = {
       'args': [],
@@ -1387,7 +1330,7 @@ def _generate_args(pipeline, future, queue_name, base_path):
       arg_list.append({'type': 'value', 'value': current_arg})
 
   kwarg_dict = params['kwargs']
-  for name, current_arg in pipeline.kwargs.iteritems():
+  for name, current_arg in list(pipeline.kwargs.items()):
     if isinstance(current_arg, PipelineFuture):
       current_arg = current_arg.default
     if isinstance(current_arg, Slot):
@@ -1404,19 +1347,19 @@ def _generate_args(pipeline, future, queue_name, base_path):
 
   output_slots = params['output_slots']
   output_slot_keys = set()
-  for name, slot in future._output_dict.iteritems():
+  for name, slot in list(future._output_dict.items()):
     output_slot_keys.add(slot.key)
     output_slots[name] = str(slot.key)
 
   params_encoded = json.dumps(params, cls=mr_util.JsonEncoder)
   params_text = None
-  params_blob = None
+  params_gcs = None
   if len(params_encoded) > _MAX_JSON_SIZE:
-    params_blob = _write_json_blob(params_encoded, pipeline.pipeline_id)
+    params_gcs = write_json_gcs(params_encoded, pipeline.pipeline_id)
   else:
     params_text = params_encoded
 
-  return dependent_slots, output_slot_keys, params_text, params_blob
+  return dependent_slots, output_slot_keys, params_text, params_gcs
 
 
 class _PipelineContext(object):
@@ -1480,12 +1423,12 @@ class _PipelineContext(object):
                                        sort_keys=True,
                                        cls=mr_util.JsonEncoder)
       value_text = None
-      value_blob = None
+      value_gcs = None
       if len(encoded_value) <= _MAX_JSON_SIZE:
         value_text = db.Text(encoded_value)
       else:
         # The encoded value is too big. Save it as a blob.
-        value_blob = _write_json_blob(encoded_value, filler_pipeline_key.name())
+        value_gcs = write_json_gcs(encoded_value, filler_pipeline_key.name())
 
       def txn():
         slot_record = db.get(slot.key)
@@ -1501,7 +1444,7 @@ class _PipelineContext(object):
         # of these up-stream pipelines.
         slot_record.filler = filler_pipeline_key
         slot_record.value_text = value_text
-        slot_record.value_blob = value_blob
+        slot_record.value_gcs = value_gcs
         slot_record.status = _SlotRecord.FILLED
         slot_record.fill_time = self._gettime()
         slot_record.put()
@@ -1630,7 +1573,7 @@ class _PipelineContext(object):
             name='ae-barrier-fire-%s-%s' % (pipeline_key.name(), purpose),
             params=dict(pipeline_key=pipeline_key, purpose=purpose),
             headers={'X-Ae-Pipeline-Key': pipeline_key},
-            target=pipeline_record.params['target']))
+            target=pipeline_record.params.get('target', None) if pipeline_record else None))
       else:
         logging.debug('Not firing barrier %r, Waiting for slots: %r',
                       barrier.key(), pending_slots)
@@ -1794,11 +1737,11 @@ class _PipelineContext(object):
     # Adjust all pipeline output keys for this Pipeline to be children of
     # the _PipelineRecord, that way we can write them all and submit in a
     # single transaction.
-    for name, slot in pipeline.outputs._output_dict.iteritems():
+    for name, slot in list(pipeline.outputs._output_dict.items()):
       slot.key = db.Key.from_path(
           *slot.key.to_path(), **dict(parent=pipeline._pipeline_key))
 
-    _, output_slots, params_text, params_blob = _generate_args(
+    _, output_slots, params_text, params_gcs = _generate_args(
         pipeline, pipeline.outputs, self.queue_name, self.base_path)
 
     @db.transactional(propagation=db.INDEPENDENT)
@@ -1811,7 +1754,7 @@ class _PipelineContext(object):
              _short_repr(pipeline_record.params)))
 
       entities_to_put = []
-      for name, slot in pipeline.outputs._output_dict.iteritems():
+      for name, slot in list(pipeline.outputs._output_dict.items()):
         entities_to_put.append(_SlotRecord(
             key=slot.key,
             root_pipeline=pipeline._pipeline_key))
@@ -1823,7 +1766,7 @@ class _PipelineContext(object):
           # Bug in DB means we need to use the storage name here,
           # not the local property name.
           params=params_text,
-          params_blob=params_blob,
+          params_gcs=params_gcs,
           start_time=self._gettime(),
           class_path=pipeline._class_path,
           max_attempts=pipeline.max_attempts))
@@ -1850,7 +1793,7 @@ class _PipelineContext(object):
     task = txn()
     # Immediately mark the output slots as existing so they can be filled
     # by asynchronous pipelines or used in test mode.
-    for output_slot in pipeline.outputs._output_dict.itervalues():
+    for output_slot in list(pipeline.outputs._output_dict.values()):
       output_slot._exists = True
     return task
 
@@ -1888,7 +1831,7 @@ class _PipelineContext(object):
       args_adjusted.append(value)
 
     kwargs_adjusted = {}
-    for name, arg in stage.kwargs.iteritems():
+    for name, arg in list(stage.kwargs.items()):
       if isinstance(arg, PipelineFuture):
         arg = arg.default
       if isinstance(arg, Slot):
@@ -1903,7 +1846,7 @@ class _PipelineContext(object):
     logging.debug('Running %s(*%s, **%s)', stage._class_path,
                   _short_repr(stage.args), _short_repr(stage.kwargs))
 
-    if stage.async:
+    if stage.async_:
       stage.run_test(*stage.args, **stage.kwargs)
     elif pipeline_generator:
       all_output_slots = set()
@@ -1930,7 +1873,7 @@ class _PipelineContext(object):
 
           last_sub_stage = yielded
           next_value = yielded.outputs
-          all_output_slots.update(next_value._output_dict.itervalues())
+          all_output_slots.update(iter(list(next_value._output_dict.values())))
         else:
           raise UnexpectedPipelineError(
               'Yielded a disallowed value: %r' % yielded)
@@ -1941,7 +1884,7 @@ class _PipelineContext(object):
         # may not happen at all. Missing outputs will be caught when they
         # are passed to the stage as inputs, or verified from the outside by
         # the test runner.
-        for slot_name, slot in last_sub_stage.outputs._output_dict.iteritems():
+        for slot_name, slot in list(last_sub_stage.outputs._output_dict.items()):
           stage.outputs._output_dict[slot_name] = slot
           # Any inherited slots won't be checked for declaration.
           all_output_slots.remove(slot)
@@ -1958,7 +1901,7 @@ class _PipelineContext(object):
     # Enforce strict output usage at the top level.
     if root:
       found_outputs = set()
-      for slot in stage.outputs._output_dict.itervalues():
+      for slot in list(stage.outputs._output_dict.values()):
         if slot.filled:
           found_outputs.add(slot.name)
         if slot.name == 'default':
@@ -2046,7 +1989,7 @@ class _PipelineContext(object):
 
     try:
       pipeline_func_class = mr_util.for_name(pipeline_record.class_path)
-    except ImportError, e:
+    except ImportError as e:
       # This means something is wrong with the deployed code. Rely on the
       # taskqueue system to do retries.
       retry_message = '%s: %s' % (e.__class__.__name__, str(e))
@@ -2060,7 +2003,7 @@ class _PipelineContext(object):
           pipeline_key.name(),
           resolve_outputs=finalize_signal,
           _pipeline_record=pipeline_record)
-    except SlotNotFilledError, e:
+    except SlotNotFilledError as e:
       logging.exception(
           'Could not resolve arguments for %s#%s. Most likely this means there '
           'is a bug in the Pipeline runtime or some intermediate data has been '
@@ -2068,7 +2011,7 @@ class _PipelineContext(object):
           pipeline_record.class_path, pipeline_key.name())
       self.transition_aborted(pipeline_key)
       return
-    except Exception, e:
+    except Exception as e:
       retry_message = '%s: %s' % (e.__class__.__name__, str(e))
       logging.exception(
           'Instantiating %s#%s raised exception. %s',
@@ -2083,7 +2026,7 @@ class _PipelineContext(object):
           pipeline_func_class.run)
       caller_output = pipeline_func.outputs
 
-    if (abort_signal and pipeline_func.async and
+    if (abort_signal and pipeline_func.async_ and
         pipeline_record.status == _PipelineRecord.RUN
         and not pipeline_func.try_cancel()):
       logging.warning(
@@ -2096,7 +2039,7 @@ class _PipelineContext(object):
         pipeline_func._finalized_internal(
               self, pipeline_key, root_pipeline_key,
               caller_output, abort_signal)
-      except Exception, e:
+      except Exception as e:
         # This means something is wrong with the deployed finalization code.
         # Rely on the taskqueue system to do retries.
         retry_message = '%s: %s' % (e.__class__.__name__, str(e))
@@ -2148,19 +2091,19 @@ class _PipelineContext(object):
       return
 
     if (pipeline_record.status == _PipelineRecord.WAITING and
-        pipeline_func.async):
+        pipeline_func.async_):
       self.transition_run(pipeline_key)
 
     try:
       result = pipeline_func._run_internal(
           self, pipeline_key, root_pipeline_key, caller_output)
-    except Exception, e:
+    except Exception as e:
       if self.handle_run_exception(pipeline_key, pipeline_func, e):
         raise
       else:
         return
 
-    if pipeline_func.async:
+    if pipeline_func.async_:
       return
 
     if not pipeline_generator:
@@ -2169,7 +2112,7 @@ class _PipelineContext(object):
       # will cause normal abort/retry behavior.
       try:
         self.fill_slot(pipeline_key, caller_output.default, result)
-      except Exception, e:
+      except Exception as e:
         retry_message = 'Bad return value. %s: %s' % (
             e.__class__.__name__, str(e))
         logging.exception(
@@ -2182,7 +2125,7 @@ class _PipelineContext(object):
         else:
           return
 
-      expected_outputs = set(caller_output._output_dict.iterkeys())
+      expected_outputs = set(caller_output._output_dict.keys())
       found_outputs = self.session_filled_output_names
       if expected_outputs != found_outputs:
         exception = SlotNotFilledError(
@@ -2205,7 +2148,7 @@ class _PipelineContext(object):
         yielded = pipeline_iter.send(next_value)
       except StopIteration:
         break
-      except Exception, e:
+      except Exception as e:
         if self.handle_run_exception(pipeline_key, pipeline_func, e):
           raise
         else:
@@ -2245,7 +2188,7 @@ class _PipelineContext(object):
       # Here the generator has yielded nothing, and thus acts as a synchronous
       # function. We can skip the rest of the generator steps completely and
       # fill the default output slot to cause finalizing.
-      expected_outputs = set(caller_output._output_dict.iterkeys())
+      expected_outputs = set(caller_output._output_dict.keys())
       expected_outputs.remove('default')
       found_outputs = self.session_filled_output_names
       if expected_outputs != found_outputs:
@@ -2262,8 +2205,8 @@ class _PipelineContext(object):
 
     # Allocate any SlotRecords that do not yet exist.
     entities_to_put = []
-    for future in sub_stage_dict.itervalues():
-      for slot in future._output_dict.itervalues():
+    for future in list(sub_stage_dict.values()):
+      for slot in list(future._output_dict.values()):
         if not slot._exists:
           entities_to_put.append(_SlotRecord(
               key=slot.key, root_pipeline=root_pipeline_key))
@@ -2279,9 +2222,9 @@ class _PipelineContext(object):
       # are being serialized. This ensures that serialization errors will
       # cause normal retry/abort behavior.
       try:
-        dependent_slots, output_slots, params_text, params_blob = \
+        dependent_slots, output_slots, params_text, params_gcs = \
             _generate_args(sub_stage, future, self.queue_name, self.base_path)
-      except Exception, e:
+      except Exception as e:
         retry_message = 'Bad child arguments. %s: %s' % (
             e.__class__.__name__, str(e))
         logging.exception(
@@ -2305,7 +2248,7 @@ class _PipelineContext(object):
           # Bug in DB means we need to use the storage name here,
           # not the local property name.
           params=params_text,
-          params_blob=params_blob,
+          params_gcs=params_gcs,
           class_path=sub_stage._class_path,
           max_attempts=sub_stage.max_attempts)
       entities_to_put.append(child_pipeline)
@@ -2607,7 +2550,8 @@ class _PipelineContext(object):
                         purpose=_BarrierRecord.START,
                         attempt=pipeline_record.current_attempt),
             headers={'X-Ae-Pipeline-Key': pipeline_key},
-            target=pipeline_record.params['target'])
+            target=pipeline_record.params.get('target', None)
+              if pipeline_record else None)
         task.add(queue_name=self.queue_name, transactional=True)
 
       pipeline_record.put()
@@ -2645,71 +2589,70 @@ class _PipelineContext(object):
 ################################################################################
 
 
-class _BarrierHandler(webapp.RequestHandler):
+class _BarrierHandler(MethodView):
   """Request handler for triggering barriers."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    context = _PipelineContext.from_environ(self.request.environ)
+    context = _PipelineContext.from_environ(request.environ)
     context.notify_barriers(
-        self.request.get('slot_key'),
-        self.request.get('cursor'),
-        use_barrier_indexes=self.request.get('use_barrier_indexes') == 'True')
+        request.form.get('slot_key', request.args.get('slot_key')),
+        request.form.get('cursor', request.args.get('cursor')),
+        use_barrier_indexes=request.form.get('use_barrier_indexes', request.args.get('use_barrier_indexes')) == 'True')
+    return "", 200
 
-
-class _PipelineHandler(webapp.RequestHandler):
+class _PipelineHandler(MethodView):
   """Request handler for running pipelines."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    context = _PipelineContext.from_environ(self.request.environ)
-    context.evaluate(self.request.get('pipeline_key'),
-                     purpose=self.request.get('purpose'),
-                     attempt=int(self.request.get('attempt', '0')))
+    context = _PipelineContext.from_environ(request.environ)
+    context.evaluate(request.form.get('pipeline_key', request.args.get('pipeline_key')),
+                     purpose=request.form.get('purpose', request.args.get('purpose')),
+                     attempt=int(request.form.get('attempt', request.args.get('attempt', '0'))))
+    return "", 200
 
 
-class _FanoutAbortHandler(webapp.RequestHandler):
+class _FanoutAbortHandler(MethodView):
   """Request handler for fanning out abort notifications."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    context = _PipelineContext.from_environ(self.request.environ)
+    context = _PipelineContext.from_environ(request.environ)
     context.continue_abort(
-        self.request.get('root_pipeline_key'),
-        self.request.get('cursor'))
+        request.form.get('root_pipeline_key', request.args.get('root_pipeline_key')),
+        request.form.get('cursor', request.args.get('cursor')),
+    )
+    return "", 200
 
 
-class _FanoutHandler(webapp.RequestHandler):
+class _FanoutHandler(MethodView):
   """Request handler for fanning out pipeline children."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    context = _PipelineContext.from_environ(self.request.environ)
+    context = _PipelineContext.from_environ(request.environ)
 
     # Set of stringified db.Keys of children to run.
     all_pipeline_keys = set()
 
     # For backwards compatibility with the old style of fan-out requests.
-    all_pipeline_keys.update(self.request.get_all('pipeline_key'))
+    all_pipeline_keys.update(request.form.getlist('pipeline_key') + request.args.getlist('pipeline_key'))
 
     # Fetch the child pipelines from the parent. This works around the 10KB
     # task payload limit. This get() is consistent-on-read and the fan-out
     # task is enqueued in the transaction that updates the parent, so the
     # fanned_out property is consistent here.
-    parent_key = self.request.get('parent_key')
-    child_indexes = [int(x) for x in self.request.get_all('child_indexes')]
+    parent_key = request.form.get('parent_key', request.args.get('parent_key'))
+    child_indexes = [int(x) for x in request.form.getlist('child_indexes') + request.args.getlist('child_indexes')]
     if parent_key:
       parent_key = db.Key(parent_key)
       parent = db.get(parent_key)
@@ -2725,28 +2668,28 @@ class _FanoutHandler(webapp.RequestHandler):
       all_tasks.append(taskqueue.Task(
           url=context.pipeline_handler_path,
           params=dict(pipeline_key=pipeline_key),
-          target=child_pipeline.params['target'],
+          target=child_pipeline.params.get('target', None) if child_pipeline else None,
           headers={'X-Ae-Pipeline-Key': pipeline_key},
           name='ae-pipeline-fan-out-' + child_pipeline.key().name()))
 
     batch_size = 100  # Limit of taskqueue API bulk add.
-    for i in xrange(0, len(all_tasks), batch_size):
+    for i in range(0, len(all_tasks), batch_size):
       batch = all_tasks[i:i+batch_size]
       try:
         taskqueue.Queue(context.queue_name).add(batch)
       except (taskqueue.TombstonedTaskError, taskqueue.TaskAlreadyExistsError):
         pass
+    return "", 200
 
 
-class _CleanupHandler(webapp.RequestHandler):
+class _CleanupHandler(MethodView):
   """Request handler for cleaning up a Pipeline."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
-      self.response.set_status(403)
-      return
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+      return abort(403)
 
-    root_pipeline_key = db.Key(self.request.get('root_pipeline_key'))
+    root_pipeline_key = db.Key(request.form.get('root_pipeline_key', request.args.get('root_pipeline_key')))
     logging.debug('Cleaning up root_pipeline_key=%r', root_pipeline_key)
 
     # TODO(user): Accumulate all BlobKeys from _PipelineRecord and
@@ -2771,34 +2714,35 @@ class _CleanupHandler(webapp.RequestHandler):
         _BarrierIndex.all(keys_only=True)
         .filter('root_pipeline =', root_pipeline_key))
     db.delete(barrier_index_keys)
+    return "", 200
 
 
-class _CallbackHandler(webapp.RequestHandler):
+class _CallbackHandler(MethodView):
   """Receives asynchronous callback requests from humans or tasks."""
 
   def post(self):
-    self.get()
+    return self.get()
 
   def get(self):
     try:
-      self.run_callback()
-    except _CallbackTaskError, e:
+      return self.run_callback()
+    except _CallbackTaskError as e:
       logging.error(str(e))
-      if 'HTTP_X_APPENGINE_TASKRETRYCOUNT' in self.request.environ:
+      if 'HTTP_X_APPENGINE_TASKRETRYCOUNT' in request.environ:
         # Silently give up on tasks that have retried many times. This
         # probably means that the target pipeline has been deleted, so there's
         # no reason to keep trying this task forever.
         retry_count = int(
-            self.request.environ.get('HTTP_X_APPENGINE_TASKRETRYCOUNT'))
+            request.environ.get('HTTP_X_APPENGINE_TASKRETRYCOUNT'))
         if retry_count > _MAX_CALLBACK_TASK_RETRIES:
           logging.error('Giving up on task after %d retries',
                         _MAX_CALLBACK_TASK_RETRIES)
-          return
+          return "", 200
 
       # NOTE: The undescriptive error code 400 are present to address security
       # risks of giving external users access to cause PipelineRecord lookups
       # and execution.
-      self.response.set_status(400)
+      return abort(400)
 
   def run_callback(self):
     """Runs the callback for the pipeline specified in the request.
@@ -2806,7 +2750,7 @@ class _CallbackHandler(webapp.RequestHandler):
     Raises:
       _CallbackTaskError if something was wrong with the request parameters.
     """
-    pipeline_id = self.request.get('pipeline_id')
+    pipeline_id = request.form.get('pipeline_id', request.args.get('pipeline_id'))
     if not pipeline_id:
       raise _CallbackTaskError('"pipeline_id" parameter missing.')
 
@@ -2820,12 +2764,12 @@ class _CallbackHandler(webapp.RequestHandler):
     real_class_path = params['class_path']
     try:
       pipeline_func_class = mr_util.for_name(real_class_path)
-    except ImportError, e:
+    except ImportError as e:
       raise _CallbackTaskError(
           'Cannot load class named "%s" for pipeline ID "%s".'
           % (real_class_path, pipeline_id))
 
-    if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       if pipeline_func_class.public_callbacks:
         pass
       elif pipeline_func_class.admin_callbacks:
@@ -2839,9 +2783,13 @@ class _CallbackHandler(webapp.RequestHandler):
             % pipeline_id)
 
     kwargs = {}
-    for key in self.request.arguments():
-      if key != 'pipeline_id':
-        kwargs[str(key)] = self.request.get(key)
+    for key in request.args.to_dict().keys():
+        if key != 'pipeline_id':
+            kwargs[str(key)] = request.args.get(key)
+
+    for key in request.form.to_dict().keys():
+        if key != 'pipeline_id' and key not in kwargs:
+          kwargs[str(key)] = request.form.get(key)
 
     def perform_callback():
       stage = pipeline_func_class.from_id(pipeline_id)
@@ -2860,11 +2808,15 @@ class _CallbackHandler(webapp.RequestHandler):
     else:
       callback_result = perform_callback()
 
+    resp = make_response()
+
     if callback_result is not None:
       status_code, content_type, content = callback_result
-      self.response.set_status(status_code)
-      self.response.headers['Content-Type'] = content_type
-      self.response.out.write(content)
+      resp.status_code = status_code
+      resp.headers['Content-Type'] = content_type
+      resp.set_data(content)
+
+    return resp
 
 
 ################################################################################
@@ -2883,7 +2835,7 @@ def _get_timestamp_ms(when):
   """
   if when is None:
     return None
-  ms_since_epoch = float(time.mktime(when.utctimetuple()) * 1000.0)
+  ms_since_epoch = calendar.timegm(when.utctimetuple()) * 1000
   ms_since_epoch += when.microsecond / 1000.0
   return int(ms_since_epoch)
 
@@ -2996,7 +2948,7 @@ def _get_internal_status(pipeline_key=None,
 
   # Fix the key names in parameters to match JavaScript style.
   for value_dict in itertools.chain(
-      output['args'], output['kwargs'].itervalues()):
+      output['args'], iter(list(output['kwargs'].values()))):
     if 'slot_key' in value_dict:
       value_dict['slotKey'] = value_dict.pop('slot_key')
 
@@ -3027,7 +2979,7 @@ def _get_internal_status(pipeline_key=None,
       output['statusConsoleUrl'] = status_record.console_url
     if status_record.link_names:
       output['statusLinks'] = dict(
-          zip(status_record.link_names, status_record.link_urls))
+          list(zip(status_record.link_names, status_record.link_urls)))
 
   # Populate status-depenedent fields.
   if status in ('run', 'finalizing', 'done', 'retry'):
@@ -3175,7 +3127,7 @@ def get_status_tree(root_pipeline_id):
         # a particular _SlotRecord, so we can report which pipeline *should*
         # be the filler.
         child_outputs = child_pipeline_record.params['output_slots']
-        for output_slot_key in child_outputs.itervalues():
+        for output_slot_key in list(child_outputs.values()):
           slot_filler_dict[db.Key(output_slot_key)] = child_pipeline_key
 
   output = {
@@ -3184,7 +3136,7 @@ def get_status_tree(root_pipeline_id):
     'pipelines': {},
   }
 
-  for pipeline_key in found_pipeline_dict.keys():
+  for pipeline_key in list(found_pipeline_dict.keys()):
     if pipeline_key not in valid_pipeline_keys:
       continue
     output['pipelines'][pipeline_key.name()] = _get_internal_status(
@@ -3194,7 +3146,7 @@ def get_status_tree(root_pipeline_id):
         barrier_dict=found_barrier_dict,
         status_dict=found_status_dict)
 
-  for slot_key, filler_pipeline_key in slot_filler_dict.iteritems():
+  for slot_key, filler_pipeline_key in list(slot_filler_dict.items()):
     output['slots'][str(slot_key)] = _get_internal_slot(
         slot_key=slot_key,
         filler_pipeline_key=filler_pipeline_key,
@@ -3272,8 +3224,8 @@ def get_root_list(class_path=None, cursor=None, count=50):
           status_dict=status_dict)
       output['pipelineId'] = pipeline_record.key().name()
       results.append(output)
-    except PipelineStatusError, e:
-      output = {'status': e.message}
+    except PipelineStatusError as e:
+      output = {'status': str(e)}
       output['classPath'] = ''
       output['pipelineId'] = pipeline_record.key().name()
       results.append(output)
@@ -3321,5 +3273,5 @@ def create_handlers_map(prefix='.*'):
       (prefix + '/rpc/tree', status_ui._TreeStatusHandler),
       (prefix + '/rpc/class_paths', status_ui._ClassPathListHandler),
       (prefix + '/rpc/list', status_ui._RootListHandler),
-      (prefix + '(/.+)', status_ui._StatusUiHandler),
+      (prefix + '/<path:resource>', status_ui._StatusUiHandler),
       ]

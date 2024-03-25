@@ -17,12 +17,12 @@
 """Tests for common Pipelines."""
 
 import logging
+import os
 import sys
 import unittest
 
 # Fix up paths for running tests.
-sys.path.insert(0, '../src/')
-
+sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 from pipeline import common
 from pipeline import pipeline
@@ -33,12 +33,12 @@ import testutil
 class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest.TestCase):
 
   def setUp(self):
-    super(CommonTest, self).setUp()
+    super().setUp()
 
   def testReturn(self):
-    self.assertEquals(
+    self.assertEqual(
         1234, self.run_pipeline(common.Return(1234)).default.value)
-    self.assertEquals(
+    self.assertEqual(
         'hi there',
         self.run_pipeline(common.Return('hi there')).default.value)
     self.assertTrue(self.run_pipeline(common.Return()).default.value is None)
@@ -48,7 +48,7 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
         self.run_pipeline(common.Ignore(1, 2, 3, 4)).default.value is None)
 
   def testDict(self):
-    self.assertEquals(
+    self.assertEqual(
       {
         'one': 'red',
         'two': 12345,
@@ -60,7 +60,7 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
                       three=[5, 'hello', 6.7])).default.value)
 
   def testList(self):
-    self.assertEquals(
+    self.assertEqual(
         [5, 'hello', 6.7],
         self.run_pipeline(common.List(5, 'hello', 6.7)).default.value)
 
@@ -68,8 +68,8 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
     try:
       self.run_pipeline(common.AbortIfTrue(True, message='Forced an abort'))
       self.fail('Should have raised')
-    except pipeline.Abort, e:
-      self.assertEquals('Forced an abort', str(e))
+    except pipeline.Abort as e:
+      self.assertEqual('Forced an abort', str(e))
 
   def testAbortIfTrue_DoNotAbort(self):
     self.run_pipeline(common.AbortIfTrue(False, message='Should not abort'))
@@ -87,102 +87,102 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
     self.assertTrue(self.run_pipeline(common.Any(True, True)).default.value)
 
   def testComplement(self):
-    self.assertEquals(True, self.run_pipeline(
+    self.assertEqual(True, self.run_pipeline(
         common.Complement(False)).default.value)
-    self.assertEquals(False, self.run_pipeline(
+    self.assertEqual(False, self.run_pipeline(
         common.Complement(True)).default.value)
-    self.assertEquals([False, True], self.run_pipeline(
+    self.assertEqual([False, True], self.run_pipeline(
         common.Complement(True, False)).default.value)
 
   def testMax(self):
-    self.assertEquals(10, self.run_pipeline(common.Max(1, 10, 5)).default.value)
-    self.assertEquals(22, self.run_pipeline(common.Max(22)).default.value)
+    self.assertEqual(10, self.run_pipeline(common.Max(1, 10, 5)).default.value)
+    self.assertEqual(22, self.run_pipeline(common.Max(22)).default.value)
     self.assertRaises(TypeError, self.run_pipeline, common.Max)
 
   def testMin(self):
-    self.assertEquals(1, self.run_pipeline(common.Min(1, 10, 5)).default.value)
-    self.assertEquals(22, self.run_pipeline(common.Min(22)).default.value)
+    self.assertEqual(1, self.run_pipeline(common.Min(1, 10, 5)).default.value)
+    self.assertEqual(22, self.run_pipeline(common.Min(22)).default.value)
     self.assertRaises(TypeError, self.run_pipeline, common.Min)
 
   def testSum(self):
-    self.assertEquals(16, self.run_pipeline(common.Sum(1, 10, 5)).default.value)
-    self.assertEquals(22, self.run_pipeline(common.Sum(22)).default.value)
+    self.assertEqual(16, self.run_pipeline(common.Sum(1, 10, 5)).default.value)
+    self.assertEqual(22, self.run_pipeline(common.Sum(22)).default.value)
     self.assertRaises(TypeError, self.run_pipeline, common.Sum)
 
   def testMultiply(self):
-    self.assertEquals(50, self.run_pipeline(
+    self.assertEqual(50, self.run_pipeline(
         common.Multiply(1, 10, 5)).default.value)
-    self.assertEquals(22, self.run_pipeline(
+    self.assertEqual(22, self.run_pipeline(
         common.Multiply(22)).default.value)
     self.assertRaises(TypeError, self.run_pipeline, common.Multiply)
 
   def testNegate(self):
-    self.assertEquals(-20, self.run_pipeline(
+    self.assertEqual(-20, self.run_pipeline(
         common.Negate(20)).default.value)
-    self.assertEquals(20, self.run_pipeline(
+    self.assertEqual(20, self.run_pipeline(
         common.Negate(-20)).default.value)
-    self.assertEquals([-20, 15, -2], self.run_pipeline(
+    self.assertEqual([-20, 15, -2], self.run_pipeline(
         common.Negate(20, -15, 2)).default.value)
     self.assertRaises(TypeError, self.run_pipeline, common.Negate)
 
   def testExtend(self):
-    self.assertEquals([1, 2, 3, 4, 5, 6, 7, 8], self.run_pipeline(
+    self.assertEqual([1, 2, 3, 4, 5, 6, 7, 8], self.run_pipeline(
         common.Extend([1, 2, 3], (4, 5, 6), [7], (8,))).default.value)
-    self.assertEquals([], self.run_pipeline(
+    self.assertEqual([], self.run_pipeline(
         common.Extend([], (), [], ())).default.value)
-    self.assertEquals([1, 2, 3, 4, 5, 6, 7, 8], self.run_pipeline(
+    self.assertEqual([1, 2, 3, 4, 5, 6, 7, 8], self.run_pipeline(
         common.Extend([1, 2, 3], [], (4, 5, 6), (), [7], (8,))).default.value)
-    self.assertEquals([[1, 2, 3], [4, 5, 6], [7], [8]], self.run_pipeline(
+    self.assertEqual([[1, 2, 3], [4, 5, 6], [7], [8]], self.run_pipeline(
         common.Extend([[1, 2, 3], [4, 5, 6], [7], [8]])).default.value)
-    self.assertEquals([], self.run_pipeline(common.Extend()).default.value)
+    self.assertEqual([], self.run_pipeline(common.Extend()).default.value)
 
   def testAppend(self):
-    self.assertEquals([[1, 2, 3], [4, 5, 6], [7], [8]], self.run_pipeline(
+    self.assertEqual([[1, 2, 3], [4, 5, 6], [7], [8]], self.run_pipeline(
         common.Append([1, 2, 3], [4, 5, 6], [7], [8])).default.value)
-    self.assertEquals([[], [], [], []], self.run_pipeline(
+    self.assertEqual([[], [], [], []], self.run_pipeline(
         common.Append([], [], [], [])).default.value)
-    self.assertEquals([1, 2, 3, 4, 5, 6, 7, 8], self.run_pipeline(
+    self.assertEqual([1, 2, 3, 4, 5, 6, 7, 8], self.run_pipeline(
         common.Append(1, 2, 3, 4, 5, 6, 7, 8)).default.value)
-    self.assertEquals([], self.run_pipeline(common.Append()).default.value)
+    self.assertEqual([], self.run_pipeline(common.Append()).default.value)
 
   def testConcat(self):
-    self.assertEquals('somestringshere', self.run_pipeline(
+    self.assertEqual('somestringshere', self.run_pipeline(
         common.Concat('some', 'strings', 'here')).default.value)
-    self.assertEquals('some|strings|here', self.run_pipeline(
+    self.assertEqual('some|strings|here', self.run_pipeline(
         common.Concat('some', 'strings', 'here', separator='|')).default.value)
-    self.assertEquals('', self.run_pipeline(common.Concat()).default.value)
+    self.assertEqual('', self.run_pipeline(common.Concat()).default.value)
 
   def testUnion(self):
-    self.assertEquals(list(set([1, 2, 3, 4])), self.run_pipeline(
+    self.assertEqual(list({1, 2, 3, 4}), self.run_pipeline(
         common.Union([1], [], [2, 3], [], [4])).default.value)
-    self.assertEquals([], self.run_pipeline(
+    self.assertEqual([], self.run_pipeline(
         common.Union([], [], [], [])).default.value)
-    self.assertEquals([], self.run_pipeline(common.Union()).default.value)
+    self.assertEqual([], self.run_pipeline(common.Union()).default.value)
 
   def testIntersection(self):
-    self.assertEquals(list(set([1, 3])), self.run_pipeline(
+    self.assertEqual(list({1, 3}), self.run_pipeline(
         common.Intersection([1, 2, 3], [1, 3, 7], [0, 3, 1])).default.value)
-    self.assertEquals([], self.run_pipeline(
+    self.assertEqual([], self.run_pipeline(
         common.Intersection([1, 2, 3], [4, 5, 6], [7, 8, 9])).default.value)
-    self.assertEquals([], self.run_pipeline(
+    self.assertEqual([], self.run_pipeline(
         common.Intersection([], [], [])).default.value)
-    self.assertEquals(
+    self.assertEqual(
         [], self.run_pipeline(common.Intersection()).default.value)
 
   def testUniquify(self):
-    self.assertEquals(set([3, 2, 1]), set(self.run_pipeline(
+    self.assertEqual({3, 2, 1}, set(self.run_pipeline(
         common.Uniquify(1, 2, 3, 3, 2, 1)).default.value))
-    self.assertEquals([], self.run_pipeline(common.Uniquify()).default.value)
+    self.assertEqual([], self.run_pipeline(common.Uniquify()).default.value)
 
   def testFormat(self):
-    self.assertEquals('this red 14 message', self.run_pipeline(
+    self.assertEqual('this red 14 message', self.run_pipeline(
         common.Format.tuple('this %s %d message', 'red', 14)).default.value)
-    self.assertEquals('this red 14 message', self.run_pipeline(
+    self.assertEqual('this red 14 message', self.run_pipeline(
         common.Format.dict(
             'this %(mystring)s %(mynumber)d message',
             mystring='red', mynumber=14)
         ).default.value)
-    self.assertEquals('a string here', self.run_pipeline(
+    self.assertEqual('a string here', self.run_pipeline(
         common.Format.tuple('a string here')).default.value)
     self.assertRaises(pipeline.Abort, self.run_pipeline,
         common.Format('blah', 'silly message'))
@@ -192,7 +192,7 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
     def SaveArgs(*args, **kwargs):
       saved.append((args, kwargs))
 
-    self.assertEquals(None, self.run_pipeline(
+    self.assertEqual(None, self.run_pipeline(
         common.Log.log(logging.INFO, 'log then %s %d', 'hi', 44)).default.value)
 
     old_log = common.Log._log_method
@@ -207,7 +207,7 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
     finally:
       common.Log._log_method = old_log
 
-    self.assertEquals(saved,
+    self.assertEqual(saved,
         [
             ((-333, 'log then %s %d', 'hi', 44), {}),
             ((10, 'debug then %s %d', 'hi', 44), {}),
@@ -220,7 +220,7 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
   def testDelay(self):
     self.assertRaises(TypeError, common.Delay, 1234)
     self.assertRaises(TypeError, common.Delay, stuff=1234)
-    self.assertEquals(5, self.run_pipeline(
+    self.assertEqual(5, self.run_pipeline(
         common.Delay(seconds=5)).default.value)
 
   def testEmailToContinue(self):
@@ -274,45 +274,45 @@ class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest
     finally:
       common.EmailToContinue._email_message = old_email_message
 
-    self.assertEquals(5, len(saved))
+    self.assertEqual(5, len(saved))
 
     # Uses default approved template.
     result1 = stage1.callback(random_token=stage1.kwargs['random_token'],
                               choice='approve')
-    self.assertEquals((200, 'text/html', '<h1>Approved!</h1>'), result1)
+    self.assertEqual((200, 'text/html', '<h1>Approved!</h1>'), result1)
 
     # Uses default disapprove template.
     result2 = stage2.callback(random_token=stage2.kwargs['random_token'],
                               choice='disapprove')
-    self.assertEquals((200, 'text/html', '<h1>Not Approved!</h1>'), result2)
+    self.assertEqual((200, 'text/html', '<h1>Not Approved!</h1>'), result2)
 
     # Uses user-supplied approve template.
     result3 = stage3.callback(random_token=stage3.kwargs['random_token'],
                               choice='approve')
-    self.assertEquals((200, 'text/html', '<h3>Woot approved!</h3>'), result3)
+    self.assertEqual((200, 'text/html', '<h3>Woot approved!</h3>'), result3)
 
     # Uses user-supplied disapprove template.
     result4 = stage4.callback(random_token=stage4.kwargs['random_token'],
                               choice='disapprove')
-    self.assertEquals((200, 'text/html', '<h3>Doh not approved!</h3>'), result4)
+    self.assertEqual((200, 'text/html', '<h3>Doh not approved!</h3>'), result4)
 
     # Invalid choice.
     result5 = stage5.callback(random_token=stage4.kwargs['random_token'],
                               choice='invalid')
-    self.assertEquals(
+    self.assertEqual(
         (403, 'text/html', '<h1>Invalid security token.</h1>'), result5)
 
     # Make sure the string/html templating works.
     message5 = saved[4]
 
-    self.assertEquals(
+    self.assertEqual(
         '/_ah/pipeline/callback?choice=approve&pipeline_id=knownid&'
         'random_token=banana\n'
         '/_ah/pipeline/callback?choice=disapprove&'
         'pipeline_id=knownid&random_token=banana',
         message5.body)
 
-    self.assertEquals(
+    self.assertEqual(
         '<a href="/_ah/pipeline/callback?choice=approve&amp;'
         'pipeline_id=knownid&amp;random_token=banana">approve</a>\n'
         '<a href="/_ah/pipeline/callback?choice=disapprove&amp;'

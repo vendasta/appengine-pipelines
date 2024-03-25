@@ -22,20 +22,17 @@
 
 import logging
 import os
-import sys
-import tempfile
 
-class TestSetupMixin(object):
+
+class TestSetupMixin:
 
   TEST_APP_ID = 'my-app-id'
   TEST_VERSION_ID = 'my-version.1234'
 
   def setUp(self):
-    super(TestSetupMixin, self).setUp()
+    super().setUp()
 
-    from google.appengine.api import apiproxy_stub_map
-    from google.appengine.api import memcache
-    from google.appengine.api import queueinfo
+    from google.appengine.api import apiproxy_stub_map, memcache, queueinfo
     from google.appengine.datastore import datastore_stub_util
     from google.appengine.ext import testbed
     from google.appengine.ext.testbed import TASKQUEUE_SERVICE_NAME
@@ -55,6 +52,7 @@ class TestSetupMixin(object):
       self.testbed.activate()
       self.testbed.setup_env(app_id=self.TEST_APP_ID, overwrite=True)
       self.testbed.init_memcache_stub()
+      self.testbed.init_mail_stub()
 
       hr_policy = datastore_stub_util.PseudoRandomHRConsistencyPolicy(probability=1)
       self.testbed.init_datastore_v3_stub(consistency_policy=hr_policy)
@@ -78,5 +76,5 @@ class TestSetupMixin(object):
                       for name in define_queues)))
 
   def tearDown(self):
-    super(TestSetupMixin, self).tearDown()
+    super().tearDown()
     self.testbed.deactivate()
