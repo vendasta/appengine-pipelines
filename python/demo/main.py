@@ -178,6 +178,6 @@ app.wsgi_app = wrap_wsgi_app(app.wsgi_app, use_legacy_context_mode=True)
 app.add_url_rule('/', view_func=MainHandler.as_view('main'))
 app.add_url_rule('/pipeline', view_func=StartPipelineHandler.as_view('pipeline'))
 
-routes = pipeline.create_handlers_map('/_ah/pipeline')
+routes = pipeline.create_handlers_map()
 for route, handler in routes:
   app.add_url_rule(route, view_func=handler.as_view(route.lstrip('/')))

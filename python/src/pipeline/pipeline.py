@@ -3252,7 +3252,7 @@ def set_enforce_auth(new_status):
   _ENFORCE_AUTH = new_status
 
 
-def create_handlers_map(prefix='.*'):
+def create_handlers_map(prefix='/_ah/pipeline'):
   """Create new handlers map.
 
   Args:
