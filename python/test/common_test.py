@@ -25,8 +25,7 @@ import unittest
 sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 from pipeline import common
-from pipeline import pipeline
-import test_shared
+from pipeline import pipeline, testing as test_shared
 import testutil
 
 

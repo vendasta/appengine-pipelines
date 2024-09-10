@@ -6,7 +6,7 @@ import setuptools
 # To debug, set DISTUTILS_DEBUG env var to anything.
 setuptools.setup(
     name="GoogleAppEnginePipeline",
-    version="2.0.0a0",
+    version="2.0.0a1",
     packages=setuptools.find_packages(),
     author="Google App Engine",
     author_email="app-engine-pipeline-api@googlegroups.com",

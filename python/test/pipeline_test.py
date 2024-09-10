@@ -32,13 +32,12 @@ import urllib.request
 # Fix up paths for running tests.
 sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
-import test_shared
 import testutil
 from flask import Flask
 from google.appengine.api import mail
 from google.appengine.ext import db, testbed
 
-from pipeline import common, pipeline, storage
+from pipeline import common, pipeline, storage, testing as test_shared
 
 # For convenience.
 _BarrierIndex = pipeline.models._BarrierIndex
