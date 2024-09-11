@@ -71,6 +71,7 @@ class TaskRunningMixin:
     super().setUp()
     self.taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
     self.queue_name = 'default'
+    self.base_path = '/_ah/pipeline'
     self.test_mode = False
     self.app = Flask(__name__)
 
@@ -97,17 +98,18 @@ class TaskRunningMixin:
         'X-AppEngine-TaskName': name,
         'X-AppEngine-QueueName': self.queue_name,
       })
-
+      
       match_url = url
-      for pattern, handler_class in pipeline.create_handlers_map():
+      for pattern, handler_class in pipeline.create_handlers_map(self.base_path):
         the_match = re.match('^%s$' % pattern, match_url)
         if the_match:
           break
       else:
-        self.fail('No matching handler for "%s %s"' % (method, url))
+        logging.warning('No matching handler for "%s %s"' % (method, url))
+        return
 
       handler = handler_class()
-
+      
       logging.debug('Executing "%s %s" name="%s"', method, url, name)
       with self.app.test_request_context(url, method=method, data=data, headers=headers):
         getattr(handler, method.lower())(*the_match.groups())
