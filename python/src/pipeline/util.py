@@ -229,7 +229,7 @@ _register_json_primitive(datetime.datetime,
 # ndb.Key
 def _JsonEncodeKey(o):
     """Json encode an ndb.Key object."""
-    return {'key_string': o.urlsafe()}
+    return {'key_string': o.urlsafe().decode('utf-8')}
 
 def _JsonDecodeKey(d):
     """Json decode a ndb.Key object."""
