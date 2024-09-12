@@ -53,9 +53,8 @@ def delete_tasks(task_list, queue_name='default'):
   """Deletes a set of tasks from a queue."""
   taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
   for task in task_list:
-    # NOTE: Use Delete here instad of DeleteTask because DeleteTask will
-    # remove the task's name from the list of tombstones, which will cause
-    # some tasks to run multiple times in tests if barriers fire twice.
+    # NOTE: Use Delete here instead of DeleteTask because DeleteTask will remove the task's name from the list of
+    # tombstones, which will cause some tasks to run multiple times in tests if barriers fire twice.
     taskqueue_stub._GetGroup().GetQueue(queue_name).Delete(task['name'])
 
 def utc_to_local(utc_datetime):
@@ -77,7 +76,7 @@ class TaskRunningMixin:
 
   def tearDown(self):
     """Make sure all tasks are deleted."""
-    delete_tasks(self.get_tasks())
+    delete_tasks(self.get_tasks(), queue_name=self.queue_name)
 
   def get_tasks(self):
     """Gets pending tasks, adding a 'params' dictionary to them."""
@@ -128,7 +127,7 @@ class TaskRunningMixin:
 
       for task in task_list:
         self.run_task(task)
-        delete_tasks([task])
+        delete_tasks([task], queue_name=self.queue_name)
 
     if require_slots_filled:
       for slot_record in _SlotRecord.all():
