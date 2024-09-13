@@ -76,7 +76,8 @@ class TaskRunningMixin:
 
   def tearDown(self):
     """Make sure all tasks are deleted."""
-    delete_tasks(self.get_tasks(), queue_name=self.queue_name)
+    if self.taskqueue_stub._queues.get(self.queue_name):
+      delete_tasks(self.get_tasks(), queue_name=self.queue_name)
 
   def get_tasks(self):
     """Gets pending tasks, adding a 'params' dictionary to them."""
