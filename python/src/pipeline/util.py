@@ -22,6 +22,7 @@ __all__ = ["for_name",
 
 #pylint: disable=g-bad-name
 
+import base64
 import datetime
 import inspect
 import json
@@ -239,3 +240,13 @@ def _JsonDecodeKey(d):
     return ndb.Key(urlsafe=d['key_string'])
 
 _register_json_primitive(ndb.Key, _JsonEncodeKey, _JsonDecodeKey)
+
+def _JsonEncodeBytes(o):
+    """Json encode a bytes object using Base64."""
+    return {'bytes': base64.b64encode(o).decode('utf-8')}
+
+def _JsonDecodeBytes(d):
+    """Json decode a bytes object using Base64."""
+    return base64.b64decode(d['bytes'])
+
+_register_json_primitive(bytes, _JsonEncodeBytes, _JsonDecodeBytes)
