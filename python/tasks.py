@@ -13,11 +13,3 @@ def serve(ctx):
         './demo'
     ]
     invoke.run(" ".join(args))
-
-
-@task()
-def test(ctx):
-    """ Run the tests """
-    invoke.run("python test/common_test.py")
-    invoke.run("python test/pipeline_test.py")
-    invoke.run("python test/util_test.py")

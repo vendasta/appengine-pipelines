@@ -1,0 +1,12 @@
+{
+    "python.testing.unittestArgs": [
+        "-v",
+        "-s",
+        "./test",
+        "-p",
+        "*_test.py"
+    ],
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "C_Cpp.intelliSenseEngineFallback": "enabled",
+}

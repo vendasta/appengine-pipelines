@@ -29,10 +29,7 @@ from pipeline import pipeline, testing as test_shared
 import testutil
 
 
-class CommonTest(testutil.TestSetupMixin, test_shared.TaskRunningMixin, unittest.TestCase):
-
-  def setUp(self):
-    super().setUp()
+class CommonTest(test_shared.TaskRunningMixin, testutil.TestSetupMixin, unittest.TestCase):
 
   def testReturn(self):
     self.assertEqual(

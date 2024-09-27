@@ -6,3 +6,4 @@ invoke
 gunicorn
 Flask
 google-cloud-storage
+pytest==7.0.1

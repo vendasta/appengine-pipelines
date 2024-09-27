@@ -43,7 +43,7 @@ def get_tasks(queue_name='default'):
     for header, value in task['headers']:
       if (header == 'content-type' and
           value == 'application/x-www-form-urlencoded'):
-        task['params'] = urllib.parse.parse_qs(base64.b64decode(task['body']).decode('latin1'))
+        task['params'] = urllib.parse.parse_qs(base64.b64decode(task['body']).decode())
         break
     adjusted_task_list.append(task)
   return adjusted_task_list

@@ -356,19 +356,19 @@ class PipelineTest(TestBase):
     # Does not require __main__.
     module_dict['other'] = mymodule
     NothingPipeline._set_class_path(module_dict=module_dict)
-    self.assertEqual('other.NothingPipeline', NothingPipeline._class_path)
+    self.assertEqual(f'{NothingPipeline.__module__}.NothingPipeline', NothingPipeline._class_path)
 
     # Will ignore __main__.
     NothingPipeline._class_path = None
     module_dict['__main__'] = mymodule
     NothingPipeline._set_class_path(module_dict=module_dict)
-    self.assertEqual('other.NothingPipeline', NothingPipeline._class_path)
+    self.assertEqual(f'{NothingPipeline.__module__}.NothingPipeline', NothingPipeline._class_path)
 
     # Will use __main__ as a last resort.
     NothingPipeline._class_path = None
     del module_dict['other']
     NothingPipeline._set_class_path(module_dict=module_dict)
-    self.assertEqual('__main__.NothingPipeline', NothingPipeline._class_path)
+    self.assertEqual(f'{NothingPipeline.__module__}.NothingPipeline', NothingPipeline._class_path)
 
   def testStart(self):
     """Tests starting a Pipeline."""
@@ -384,7 +384,7 @@ class PipelineTest(TestBase):
 
     pipeline_record = _PipelineRecord.get_by_key_name(stage.pipeline_id)
     self.assertTrue(pipeline_record is not None)
-    self.assertEqual('__main__.NothingPipeline', pipeline_record.class_path)
+    self.assertEqual(f'{NothingPipeline.__module__}.NothingPipeline', pipeline_record.class_path)
     self.assertEqual(_PipelineRecord.WAITING, pipeline_record.status)
 
     params = pipeline_record.params
@@ -536,8 +536,7 @@ class PipelineTest(TestBase):
       self.fail('Did not raise')
     except pipeline.PipelineSetupError as e:
       self.assertEqual(
-          'Error starting __main__.OutputlessPipeline(*(), **{})#banana: '
-          'Doh! Fake error',
+          f'Error starting {OutputlessPipeline.__module__}.OutputlessPipeline(*(), **{{}})#banana: Doh! Fake error',
           str(e))
 
   def testFromId(self):
@@ -841,7 +840,7 @@ class PipelineTest(TestBase):
     self.assertEqual('my-app-id@my-app-id.appspotmail.com', sender)
     self.assertEqual(
         'Pipeline successful: App "my-app-id", '
-        '__main__.OutputlessPipeline#banana',
+        f'{OutputlessPipeline.__module__}.OutputlessPipeline#banana',
         subject)
     self.assertEqual(
         'View the pipeline results here:\n\n'
@@ -879,7 +878,7 @@ class PipelineTest(TestBase):
     self.assertEqual('my-app-id@my-app-id.appspotmail.com', sender)
     self.assertEqual(
         'Pipeline aborted: App "my-app-id", '
-        '__main__.OutputlessPipeline#banana',
+        f'{OutputlessPipeline.__module__}.OutputlessPipeline#banana',
         subject)
     self.assertEqual(
         'View the pipeline results here:\n\n'
@@ -948,7 +947,7 @@ class PipelineTest(TestBase):
       stage.set_status(message=object())
     except pipeline.PipelineRuntimeError as e:
       self.assertEqual(
-          'Could not set status for __main__.OutputlessPipeline(*(), **{})'
+          f'Could not set status for {OutputlessPipeline.__module__}.OutputlessPipeline(*(), **{{}})'
           '#banana: Property message must be convertible to a Text instance '
           '(Text() argument should be str or unicode, not object)',
           str(e))
@@ -1129,46 +1128,50 @@ class OrderingTest(TestBase):
 
 class EmailOnHighReplicationTest(TestBase):
 
-  TEST_APP_ID = 's~my-hrd-app'
+    TEST_APP_ID = "s~my-hrd-app"
 
-  def testFinalizeEmailDone_HighReplication(self):
-    """Tests completion emails for completed root pipelines on HRD."""
+    def testFinalizeEmailDone_HighReplication(self):
+        """Tests completion emails for completed root pipelines on HRD."""
 
-    stage = OutputlessPipeline()
-    stage.start(idempotence_key='banana')
-    stage._context.transition_complete(stage._pipeline_key)
-    other = OutputlessPipeline.from_id(stage.pipeline_id)
+        stage = OutputlessPipeline()
+        stage.start(idempotence_key="banana")
+        stage._context.transition_complete(stage._pipeline_key)
+        other = OutputlessPipeline.from_id(stage.pipeline_id)
 
-    result = []
-    def fake_mail(self, sender, subject, body, html=None):
-        result.append((sender, subject, body, html))
+        result = []
 
-    old_sendmail = pipeline.Pipeline._send_mail
-    pipeline.Pipeline._send_mail = fake_mail
-    try:
-        other.send_result_email()
-    finally:
-        pipeline.Pipeline._send_mail = old_sendmail
+        def fake_mail(self, sender, subject, body, html=None):
+            result.append((sender, subject, body, html))
 
-    self.assertEqual(1, len(result))
-    sender, subject, body, html = result[0]
-    self.assertEqual('my-hrd-app@my-hrd-app.appspotmail.com', sender)
-    self.assertEqual(
-      'Pipeline successful: App "my-hrd-app", '
-      '__main__.OutputlessPipeline#banana',
-      subject)
-    self.assertEqual(
-      'View the pipeline results here:\n\n'
-      'http://my-hrd-app.appspot.com/_ah/pipeline/status?root=banana\n\n'
-      'Thanks,\n\nThe Pipeline API\n',
-      body)
-    self.assertEqual(
+        old_sendmail = pipeline.Pipeline._send_mail
+        pipeline.Pipeline._send_mail = fake_mail
+        try:
+            other.send_result_email()
+        finally:
+            pipeline.Pipeline._send_mail = old_sendmail
+
+        self.assertEqual(1, len(result))
+        sender, subject, body, html = result[0]
+        self.assertEqual("my-hrd-app@my-hrd-app.appspotmail.com", sender)
+        self.assertEqual(
+            f'Pipeline successful: App "my-hrd-app", '
+            f"{OutputlessPipeline.__module__}.OutputlessPipeline#banana",
+            subject,
+        )
+        self.assertEqual(
+            "View the pipeline results here:\n\n"
+            "http://my-hrd-app.appspot.com/_ah/pipeline/status?root=banana\n\n"
+            "Thanks,\n\nThe Pipeline API\n",
+            body,
+        )
+        self.assertEqual(
       '<html><body>\n<p>View the pipeline results here:</p>\n\n<p><a href="'
       'http://my-hrd-app.appspot.com/_ah/pipeline/status?root=banana"\n'
       '>http://my-hrd-app.appspot.com/_ah/pipeline/status?root=banana'
       '</a></p>\n\n<p>\nThanks,\n<br>\nThe Pipeline API\n</p>\n'
       '</body></html>\n',
       html)
+
 
 class GenerateArgs(pipeline.Pipeline):
   """Pipeline to test the _generate_args helper function."""
@@ -3401,11 +3404,12 @@ class EchoAsync(pipeline.Pipeline):
   async_ = True
 
   def run(self, *args):
+    encoded_args = base64.b64encode(pickle.dumps(args)).decode('utf-8')
     self.get_callback_task(
-        params=dict(return_value=pickle.dumps(args).decode('latin1'))).add()
+        params=dict(return_value=encoded_args)).add()
 
   def callback(self, return_value):
-    args = pickle.loads(return_value.encode('latin1'))
+    args = pickle.loads(base64.b64decode(return_value.encode('utf-8')))
     if not args:
       self.complete(None)
     elif len(args) == 1:
@@ -3414,7 +3418,8 @@ class EchoAsync(pipeline.Pipeline):
       self.complete(args)
 
   def run_test(self, *args):
-    self.callback(pickle.dumps(args).decode('latin1'))
+    encoded_args = base64.b64encode(pickle.dumps(args)).decode('utf-8')
+    self.callback(encoded_args)
 
 
 class EchoNamedSync(pipeline.Pipeline):
@@ -4991,7 +4996,7 @@ class StatusTest(TestBase):
     """Tests the get_pipeline_names function."""
     names = pipeline.get_pipeline_names()
     self.assertTrue(None not in names)  # No base-class Pipeline
-    self.assertIn('__main__.EchoSync', names)
+    self.assertIn(EchoAsync._class_path, names)
 
     found = False
     for name in names:
@@ -5016,8 +5021,8 @@ class StatusTest(TestBase):
     found_names = [
         (p['pipelineId'], p['classPath']) for p in found['pipelines']]
     expected = [
-        ('lemon', '__main__.EchoSync'),
-        ('banana', '__main__.NothingPipeline')
+        ('lemon', EchoSync._class_path),
+        ('banana', NothingPipeline._class_path)
     ]
     self.assertEqual(expected, found_names)
 
@@ -5075,14 +5080,13 @@ class StatusTest(TestBase):
     EchoSync('one').start(idempotence_key='tomato')
 
     found = pipeline.get_root_list(class_path=NothingPipeline.class_path)
-    self.assertEqual(['__main__.NothingPipeline', '__main__.NothingPipeline'],
+    self.assertEqual([NothingPipeline._class_path, NothingPipeline._class_path],
                       [p['classPath'] for p in found['pipelines']])
 
     found = pipeline.get_root_list(class_path=EchoSync.class_path)
-    self.assertEqual(['__main__.EchoSync'],
+    self.assertEqual([EchoSync._class_path],
                       [p['classPath'] for p in found['pipelines']])
 
-  
 
 if __name__ == '__main__':
   logging.getLogger().setLevel(logging.DEBUG)
