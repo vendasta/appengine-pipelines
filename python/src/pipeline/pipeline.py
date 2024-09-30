@@ -2598,9 +2598,10 @@ class _BarrierHandler(MethodView):
 
     context = _PipelineContext.from_environ(request.environ)
     context.notify_barriers(
-        request.form.get('slot_key', request.args.get('slot_key')),
-        request.form.get('cursor', request.args.get('cursor')),
-        use_barrier_indexes=request.form.get('use_barrier_indexes', request.args.get('use_barrier_indexes')) == 'True')
+        request.values.get('slot_key'),
+        request.values.get('cursor'),
+        use_barrier_indexes=request.values.get('use_barrier_indexes') == 'True'
+    )
     return "", 200
 
 class _PipelineHandler(MethodView):
@@ -2611,9 +2612,9 @@ class _PipelineHandler(MethodView):
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
-    context.evaluate(request.form.get('pipeline_key', request.args.get('pipeline_key')),
-                     purpose=request.form.get('purpose', request.args.get('purpose')),
-                     attempt=int(request.form.get('attempt', request.args.get('attempt', '0'))))
+    context.evaluate(request.values.get('pipeline_key'),
+                     purpose=request.values.get('purpose'),
+                     attempt=int(request.values.get('attempt', '0')))
     return "", 200
 
 
@@ -2626,8 +2627,8 @@ class _FanoutAbortHandler(MethodView):
 
     context = _PipelineContext.from_environ(request.environ)
     context.continue_abort(
-        request.form.get('root_pipeline_key', request.args.get('root_pipeline_key')),
-        request.form.get('cursor', request.args.get('cursor')),
+        request.values.get('root_pipeline_key'),
+        request.values.get('cursor'),
     )
     return "", 200
 
@@ -2643,16 +2644,15 @@ class _FanoutHandler(MethodView):
 
     # Set of stringified db.Keys of children to run.
     all_pipeline_keys = set()
-
     # For backwards compatibility with the old style of fan-out requests.
-    all_pipeline_keys.update(request.form.getlist('pipeline_key') + request.args.getlist('pipeline_key'))
+    all_pipeline_keys.update(request.values.getlist('pipeline_key'))
 
     # Fetch the child pipelines from the parent. This works around the 10KB
     # task payload limit. This get() is consistent-on-read and the fan-out
     # task is enqueued in the transaction that updates the parent, so the
     # fanned_out property is consistent here.
-    parent_key = request.form.get('parent_key', request.args.get('parent_key'))
-    child_indexes = [int(x) for x in request.form.getlist('child_indexes') + request.args.getlist('child_indexes')]
+    parent_key = request.values.get('parent_key')
+    child_indexes = [int(x) for x in request.values.getlist('child_indexes')]
     if parent_key:
       parent_key = db.Key(parent_key)
       parent = db.get(parent_key)
@@ -2689,7 +2689,7 @@ class _CleanupHandler(MethodView):
     if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       return abort(403)
 
-    root_pipeline_key = db.Key(request.form.get('root_pipeline_key', request.args.get('root_pipeline_key')))
+    root_pipeline_key = db.Key(request.values.get('root_pipeline_key'))
     logging.debug('Cleaning up root_pipeline_key=%r', root_pipeline_key)
 
     # TODO(user): Accumulate all BlobKeys from _PipelineRecord and
@@ -2750,7 +2750,7 @@ class _CallbackHandler(MethodView):
     Raises:
       _CallbackTaskError if something was wrong with the request parameters.
     """
-    pipeline_id = request.form.get('pipeline_id', request.args.get('pipeline_id'))
+    pipeline_id = request.values.get('pipeline_id')
     if not pipeline_id:
       raise _CallbackTaskError('"pipeline_id" parameter missing.')
 
@@ -2783,13 +2783,9 @@ class _CallbackHandler(MethodView):
             % pipeline_id)
 
     kwargs = {}
-    for key in request.args.to_dict().keys():
+    for key in request.values.to_dict().keys():
         if key != 'pipeline_id':
-            kwargs[str(key)] = request.args.get(key)
-
-    for key in request.form.to_dict().keys():
-        if key != 'pipeline_id' and key not in kwargs:
-          kwargs[str(key)] = request.form.get(key)
+            kwargs[str(key)] = request.values.get(key)
 
     def perform_callback():
       stage = pipeline_func_class.from_id(pipeline_id)
