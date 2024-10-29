@@ -40,10 +40,10 @@ class TestSetupMixin:
     before_level = logging.getLogger().getEffectiveLevel()
 
     os.environ['APPLICATION_ID'] = self.TEST_APP_ID
-    os.environ['CURRENT_VERSION_ID'] = self.TEST_VERSION_ID
+    os.environ['GAE_VERSION'] = self.TEST_VERSION_ID
     os.environ['HTTP_HOST'] = '%s.appspot.com' % self.TEST_APP_ID
     os.environ['DEFAULT_VERSION_HOSTNAME'] = os.environ['HTTP_HOST']
-    os.environ['CURRENT_MODULE_ID'] = 'foo-module'
+    os.environ['GAE_SERVICE'] = 'foo-module'
     
     try:
       logging.getLogger().setLevel(100)

@@ -30,8 +30,8 @@ class GetTaskTargetTest(unittest.TestCase):
 
   def setUp(self):
     super().setUp()
-    os.environ["CURRENT_VERSION_ID"] = "v7.1"
-    os.environ["CURRENT_MODULE_ID"] = "foo-module"
+    os.environ["GAE_VERSION"] = "v7.1"
+    os.environ["GAE_SERVICE"] = "foo-module"
 
   def testGetTaskTarget(self):
     self.assertEqual("v7.foo-module", util._get_task_target())
@@ -40,7 +40,7 @@ class GetTaskTargetTest(unittest.TestCase):
     self.assertEqual("v7.foo-module", task.target)
 
   def testGetTaskTargetDefaultModule(self):
-    os.environ["CURRENT_MODULE_ID"] = "default"
+    os.environ["GAE_SERVICE"] = "default"
     self.assertEqual("v7.default", util._get_task_target())
     task = taskqueue.Task(url="/relative_url",
                           target=util._get_task_target())

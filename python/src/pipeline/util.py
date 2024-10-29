@@ -52,14 +52,14 @@ def _get_task_target():
 
   # Further protect against test cases that doesn't set env vars
   # propertly.
-  if ("CURRENT_VERSION_ID" not in os.environ or
-      "CURRENT_MODULE_ID" not in os.environ):
+  if ("GAE_VERSION" not in os.environ or
+      "GAE_SERVICE" not in os.environ):
     logging.warning("Running Pipeline in non TEST_MODE but important "
                     "env vars are not set.")
     return None
 
-  version = os.environ["CURRENT_VERSION_ID"].split(".")[0]
-  module = os.environ["CURRENT_MODULE_ID"]
+  version = os.environ["GAE_VERSION"].split(".")[0]
+  module = os.environ["GAE_SERVICE"]
   return "{}.{}".format(version, module)
 
 
