@@ -3,7 +3,7 @@ steps:
     dir: /workspace/python
     script: |
       #!/usr/bin/env bash
-      pip install -r requirements.txt --user
+      pip install -r requirements.txt
     id: "install-dependencies"
 
   - name: 'python:3.9.4'
@@ -11,5 +11,4 @@ steps:
     script: |
       #!/usr/bin/env bash
       pytest
-    waitFor: ['install-dependencies']
     id: "test"

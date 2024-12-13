@@ -3,7 +3,7 @@ steps:
     dir: /workspace/python
     script: |
       #!/usr/bin/env bash
-      pip install -r requirements.txt --user
+      pip install -r requirements.txt
     id: "install-dependencies"
 
   - name: 'python:3.9.4'
@@ -11,7 +11,6 @@ steps:
     script: |
       #!/usr/bin/env bash
       pytest
-    waitFor: ['install-dependencies']
     id: "test"
 
   - name: 'python:3.9.4'
@@ -20,5 +19,4 @@ steps:
       #!/usr/bin/env bash
       python3 setup.py sdist
       python3 -m twine upload --repository-url https://us-central1-python.pkg.dev/repcore-prod/python/ dist/*
-    waitFor: ['test']
     id: "publish"
