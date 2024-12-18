@@ -3,9 +3,8 @@
 import base64
 import calendar
 import datetime
-import logging
+import os
 import random
-import re
 import urllib
 import urllib.parse
 
@@ -73,6 +72,15 @@ class TaskRunningMixin:
     self.base_path = '/_ah/pipeline'
     self.test_mode = False
     self.app = Flask(__name__)
+    self.app.testing = True
+    for route, handler in pipeline.create_handlers_map():
+      self.app.add_url_rule(route, view_func=handler.as_view(route.lstrip("/")))
+    try:
+      import mapreduce
+      for route, handler in mapreduce.create_handlers_map():
+        self.app.add_url_rule(route, view_func=handler.as_view(route.lstrip("/")))
+    except ImportError:
+      pass
 
   def tearDown(self):
     """Make sure all tasks are deleted."""
@@ -95,24 +103,15 @@ class TaskRunningMixin:
       data = base64.b64decode(task['body'])
 
       headers.update({
-        'X-AppEngine-TaskName': name,
-        'X-AppEngine-QueueName': self.queue_name,
+          'X-AppEngine-TaskName': name,
+          'X-AppEngine-QueueName': self.queue_name,
       })
-      
-      match_url = url
-      for pattern, handler_class in pipeline.create_handlers_map(self.base_path):
-        the_match = re.match('^%s$' % pattern, match_url)
-        if the_match:
-          break
-      else:
-        logging.warning('No matching handler for "%s %s"' % (method, url))
-        return
 
-      handler = handler_class()
-      
-      logging.debug('Executing "%s %s" name="%s"', method, url, name)
-      with self.app.test_request_context(url, method=method, data=data, headers=headers):
-        getattr(handler, method.lower())(*the_match.groups())
+      os.environ['HTTP_X_APPENGINE_TASKNAME'] = name
+      os.environ['HTTP_X_APPENGINE_QUEUENAME'] = self.queue_name
+
+      with self.app.test_client() as c:
+          c.open(url, method=method, data=data, headers=headers)
 
   def run_pipeline(self, pipeline, *args, **kwargs):
     """Runs the pipeline and returns outputs."""
