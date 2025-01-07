@@ -28,6 +28,7 @@ from flask.views import MethodView
 from google.appengine.api import mail, users
 from google.appengine.ext import db
 from google.appengine.api import wrap_wsgi_app
+from google.appengine.api import full_app_id
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
@@ -103,8 +104,8 @@ class EmailCountReport(pipeline.Pipeline):
     logging.info('Email body is:\n%s', rendered)
 
     # Works in production, I swear!
-    sender = '{}@{}.appspotmail.com'.format(os.environ['APPLICATION_ID'],
-                                        os.environ['APPLICATION_ID'])
+    app_id = full_app_id.get()
+    sender = '{}@{}.appspotmail.com'.format(app_id, app_id)
     try:
       mail.send_mail(
           sender=sender,

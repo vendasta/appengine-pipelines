@@ -23,6 +23,8 @@
 import logging
 import os
 
+from google.appengine.api import full_app_id
+
 
 class TestSetupMixin:
 
@@ -39,7 +41,7 @@ class TestSetupMixin:
 
     before_level = logging.getLogger().getEffectiveLevel()
 
-    os.environ['APPLICATION_ID'] = self.TEST_APP_ID
+    full_app_id.put(self.TEST_APP_ID)
     os.environ['GAE_VERSION'] = self.TEST_VERSION_ID
     os.environ['HTTP_HOST'] = '%s.appspot.com' % self.TEST_APP_ID
     os.environ['DEFAULT_VERSION_HOSTNAME'] = os.environ['HTTP_HOST']

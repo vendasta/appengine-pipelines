@@ -44,7 +44,7 @@ import uuid
 
 from flask import abort, make_response, request
 from flask.views import MethodView
-from google.appengine.api import mail, taskqueue, users
+from google.appengine.api import mail, taskqueue, users, full_app_id
 from google.appengine.ext import db
 
 # Relative imports
@@ -869,10 +869,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     if self.was_aborted:
       status = 'aborted'
 
-    app_id = os.environ['APPLICATION_ID']
-    shard_index = app_id.find('~')
-    if shard_index != -1:
-      app_id = app_id[shard_index+1:]
+    app_id = full_app_id.project_id()
 
     param_dict = {
         'status': status,
