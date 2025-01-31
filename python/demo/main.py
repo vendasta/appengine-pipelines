@@ -21,14 +21,11 @@
 import logging
 import os
 import sys
-import time
 
 from flask import Flask, render_template, request, redirect
 from flask.views import MethodView
-from google.appengine.api import users
 from google.appengine.ext import db
 from google.appengine.api import wrap_wsgi_app
-from google.appengine.api import full_app_id
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
