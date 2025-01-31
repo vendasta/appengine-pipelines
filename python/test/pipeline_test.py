@@ -34,7 +34,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 import testutil
 from flask import Flask
-from google.appengine.api import mail
 from google.appengine.ext import db, testbed
 
 from pipeline import common, pipeline, storage, testing as test_shared
@@ -61,7 +60,6 @@ class TestBase(testutil.TestSetupMixin, unittest.TestCase):
     self.testbed.init_blobstore_stub()
     self.testbed.init_urlfetch_stub()
     self.testbed.init_app_identity_stub()
-    self.testbed.init_mail_stub()
 
     self.storageData = {}
     def _write_json_gcs(encoded_value, pipeline_id=None):
@@ -817,99 +815,6 @@ class PipelineTest(TestBase):
     self.assertTrue(stage.abort('gotta bail!'))
     self.assertFalse(stage.abort('gotta bail 2!'))
 
-  def testFinalizeEmailDone(self):
-    """Tests completion emails for completed root pipelines."""
-    stage = OutputlessPipeline()
-    stage.start(idempotence_key='banana')
-    stage._context.transition_complete(stage._pipeline_key)
-    other = OutputlessPipeline.from_id(stage.pipeline_id)
-
-    result = []
-    def fake_mail(self, sender, subject, body, html=None):
-      result.append((sender, subject, body, html))
-
-    old_sendmail = pipeline.Pipeline._send_mail
-    pipeline.Pipeline._send_mail = fake_mail
-    try:
-      other.send_result_email()
-    finally:
-      pipeline.Pipeline._send_mail = old_sendmail
-
-    self.assertEqual(1, len(result))
-    sender, subject, body, html = result[0]
-    self.assertEqual('my-app-id@my-app-id.appspotmail.com', sender)
-    self.assertEqual(
-        'Pipeline successful: App "my-app-id", '
-        f'{OutputlessPipeline.__module__}.OutputlessPipeline#banana',
-        subject)
-    self.assertEqual(
-        'View the pipeline results here:\n\n'
-        'http://my-app-id.appspot.com/_ah/pipeline/status?root=banana\n\n'
-        'Thanks,\n\nThe Pipeline API\n',
-        body)
-    self.assertEqual(
-        '<html><body>\n<p>View the pipeline results here:</p>\n\n<p><a href="'
-        'http://my-app-id.appspot.com/_ah/pipeline/status?root=banana"\n'
-        '>http://my-app-id.appspot.com/_ah/pipeline/status?root=banana'
-        '</a></p>\n\n<p>\nThanks,\n<br>\nThe Pipeline API\n</p>\n'
-        '</body></html>\n',
-        html)
-
-  def testFinalizeEmailAborted(self):
-    """Tests completion emails for aborted root pipelines."""
-    stage = OutputlessPipeline()
-    stage.start(idempotence_key='banana')
-    stage._context.transition_aborted(stage._pipeline_key)
-    other = OutputlessPipeline.from_id(stage.pipeline_id)
-
-    result = []
-    def fake_mail(self, sender, subject, body, html=None):
-      result.append((sender, subject, body, html))
-
-    old_sendmail = pipeline.Pipeline._send_mail
-    pipeline.Pipeline._send_mail = fake_mail
-    try:
-      other.send_result_email()
-    finally:
-      pipeline.Pipeline._send_mail = old_sendmail
-
-    self.assertEqual(1, len(result))
-    sender, subject, body, html = result[0]
-    self.assertEqual('my-app-id@my-app-id.appspotmail.com', sender)
-    self.assertEqual(
-        'Pipeline aborted: App "my-app-id", '
-        f'{OutputlessPipeline.__module__}.OutputlessPipeline#banana',
-        subject)
-    self.assertEqual(
-        'View the pipeline results here:\n\n'
-        'http://my-app-id.appspot.com/_ah/pipeline/status?root=banana\n\n'
-        'Thanks,\n\nThe Pipeline API\n',
-        body)
-    self.assertEqual(
-        '<html><body>\n<p>View the pipeline results here:</p>\n\n<p><a href="'
-        'http://my-app-id.appspot.com/_ah/pipeline/status?root=banana"\n'
-        '>http://my-app-id.appspot.com/_ah/pipeline/status?root=banana'
-        '</a></p>\n\n<p>\nThanks,\n<br>\nThe Pipeline API\n</p>\n'
-        '</body></html>\n',
-        html)
-
-  def testFinalizeEmailError(self):
-    """Tests when send_result_email raises an error."""
-    stage = OutputlessPipeline()
-    stage.start(idempotence_key='banana')
-    stage._context.transition_complete(stage._pipeline_key)
-    other = OutputlessPipeline.from_id(stage.pipeline_id)
-
-    def fake_mail(*args, **kwargs):
-      raise mail.InvalidEmailError('Doh!')
-
-    old_sendmail = pipeline.Pipeline._send_mail
-    pipeline.Pipeline._send_mail = fake_mail
-    try:
-      other.send_result_email()
-    finally:
-      pipeline.Pipeline._send_mail = old_sendmail
-
   def testSetStatus(self):
     """Tests for the set_status method."""
     stage = OutputlessPipeline()
@@ -1124,53 +1029,6 @@ class OrderingTest(TestBase):
     inorder2 = pipeline.InOrder()
     self.assertRaises(pipeline.UnexpectedPipelineError, inorder2.__enter__)
     inorder.__exit__(None, None, None)
-
-
-class EmailOnHighReplicationTest(TestBase):
-
-    TEST_APP_ID = "s~my-hrd-app"
-
-    def testFinalizeEmailDone_HighReplication(self):
-        """Tests completion emails for completed root pipelines on HRD."""
-
-        stage = OutputlessPipeline()
-        stage.start(idempotence_key="banana")
-        stage._context.transition_complete(stage._pipeline_key)
-        other = OutputlessPipeline.from_id(stage.pipeline_id)
-
-        result = []
-
-        def fake_mail(self, sender, subject, body, html=None):
-            result.append((sender, subject, body, html))
-
-        old_sendmail = pipeline.Pipeline._send_mail
-        pipeline.Pipeline._send_mail = fake_mail
-        try:
-            other.send_result_email()
-        finally:
-            pipeline.Pipeline._send_mail = old_sendmail
-
-        self.assertEqual(1, len(result))
-        sender, subject, body, html = result[0]
-        self.assertEqual("my-hrd-app@my-hrd-app.appspotmail.com", sender)
-        self.assertEqual(
-            f'Pipeline successful: App "my-hrd-app", '
-            f"{OutputlessPipeline.__module__}.OutputlessPipeline#banana",
-            subject,
-        )
-        self.assertEqual(
-            "View the pipeline results here:\n\n"
-            "http://my-hrd-app.appspot.com/_ah/pipeline/status?root=banana\n\n"
-            "Thanks,\n\nThe Pipeline API\n",
-            body,
-        )
-        self.assertEqual(
-      '<html><body>\n<p>View the pipeline results here:</p>\n\n<p><a href="'
-      'http://my-hrd-app.appspot.com/_ah/pipeline/status?root=banana"\n'
-      '>http://my-hrd-app.appspot.com/_ah/pipeline/status?root=banana'
-      '</a></p>\n\n<p>\nThanks,\n<br>\nThe Pipeline API\n</p>\n'
-      '</body></html>\n',
-      html)
 
 
 class GenerateArgs(pipeline.Pipeline):
@@ -5001,7 +4859,7 @@ class StatusTest(TestBase):
     found = False
     for name in names:
       # Name may be relative to another module, like 'foo.pipeline.common...'
-      found = 'pipeline.common.Delay' in name
+      found = 'pipeline.common.All' in name
       if found:
         break
     self.assertTrue(found)

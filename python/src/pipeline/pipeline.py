@@ -44,7 +44,7 @@ import uuid
 
 from flask import abort, make_response, request
 from flask.views import MethodView
-from google.appengine.api import mail, taskqueue, users, full_app_id
+from google.appengine.api import taskqueue, users
 from google.appengine.ext import db
 
 # Relative imports
@@ -414,7 +414,6 @@ class Pipeline(object, metaclass=_PipelineMeta):
 
   # Internal only.
   _class_path = None  # Set for each class
-  _send_mail = mail.send_mail_to_admins  # For testing
 
   # callback_xg_transaction: Determines whether callbacks are processed within
   # a single entity-group transaction (False), a cross-entity-group
@@ -856,63 +855,6 @@ class Pipeline(object, metaclass=_PipelineMeta):
     kwargs['method'] = 'POST'
     return taskqueue.Task(*args, **kwargs)
 
-  def send_result_email(self, sender=None):
-    """Sends an email to admins indicating this Pipeline has completed.
-
-    For developer convenience. Automatically called from finalized for root
-    Pipelines that do not override the default action.
-
-    Args:
-      sender: (optional) Override the sender's email address.
-    """
-    status = 'successful'
-    if self.was_aborted:
-      status = 'aborted'
-
-    app_id = full_app_id.project_id()
-
-    param_dict = {
-        'status': status,
-        'app_id': app_id,
-        'class_path': self._class_path,
-        'pipeline_id': self.root_pipeline_id,
-        'base_path': '%s.appspot.com%s' % (app_id, self.base_path),
-    }
-    subject = (
-        'Pipeline %(status)s: App "%(app_id)s", %(class_path)s'
-        '#%(pipeline_id)s' % param_dict)
-    body = """View the pipeline results here:
-
-http://%(base_path)s/status?root=%(pipeline_id)s
-
-Thanks,
-
-The Pipeline API
-""" % param_dict
-
-    html = """<html><body>
-<p>View the pipeline results here:</p>
-
-<p><a href="http://%(base_path)s/status?root=%(pipeline_id)s"
->http://%(base_path)s/status?root=%(pipeline_id)s</a></p>
-
-<p>
-Thanks,
-<br>
-The Pipeline API
-</p>
-</body></html>
-""" % param_dict
-
-    if sender is None:
-      sender = '%s@%s.appspotmail.com' % (app_id, app_id)
-    try:
-      self._send_mail(sender, subject, body, html=html)
-    except (mail.InvalidSenderError, mail.InvalidEmailError):
-      logging.warning('Could not send result email for '
-                      'root pipeline ID "%s" from sender "%s"',
-                      self.root_pipeline_id, sender)
-
   def cleanup(self):
     """Clean up this Pipeline and all Datastore records used for coordination.
 
@@ -978,12 +920,10 @@ The Pipeline API
   def finalized(self):
     """Finalizes this Pipeline after execution if it's a generator.
 
-    Default action as the root pipeline is to email the admins with the status.
     Implementors be sure to call 'was_aborted' to find out if the finalization
     that you're handling is for a success or error case.
     """
-    if self.pipeline_id == self.root_pipeline_id:
-      self.send_result_email()
+    
 
   def finalized_test(self, *args, **kwargs):
     """Finalized this Pipeline in test mode."""

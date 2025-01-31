@@ -25,7 +25,7 @@ import time
 
 from flask import Flask, render_template, request, redirect
 from flask.views import MethodView
-from google.appengine.api import mail, users
+from google.appengine.api import users
 from google.appengine.ext import db
 from google.appengine.api import wrap_wsgi_app
 from google.appengine.api import full_app_id
@@ -88,39 +88,9 @@ class UselessPipeline(pipeline.Pipeline):
     self.fill('coolness', 1234)
 
 
-class EmailCountReport(pipeline.Pipeline):
-
-  def run(self, receiver_email_address, kind_count_list):
-    body = [
-        'At %s the counts are:' % time.ctime()
-    ]
-    result_sum = 0
-    for (entity_kind, property_name, value, count) in kind_count_list:
-      body.append('%s.%s = "%s" -> %d' % (
-                  entity_kind, property_name, value, count))
-      result_sum += count
-
-    rendered = '\n'.join(body)
-    logging.info('Email body is:\n%s', rendered)
-
-    # Works in production, I swear!
-    app_id = full_app_id.get()
-    sender = '{}@{}.appspotmail.com'.format(app_id, app_id)
-    try:
-      mail.send_mail(
-          sender=sender,
-          to=receiver_email_address,
-          subject='Entity count report',
-          body=rendered)
-    except (mail.InvalidSenderError, mail.InvalidEmailError):
-      logging.exception('This should work in production.')
-
-    return result_sum
-
-
 class CountReport(pipeline.Pipeline):
 
-  def run(self, email_address, entity_kind, property_name, *value_list):
+  def run(self, entity_kind, property_name, *value_list):
     yield common.Log.info('UselessPipeline.coolness = %s',
                           (yield UselessPipeline()).coolness)
 
@@ -131,7 +101,6 @@ class CountReport(pipeline.Pipeline):
       with pipeline.InOrder():
         yield common.Delay(seconds=1)
         yield common.Log.info('Done waiting')
-        yield EmailCountReport(email_address, split_counts)
 
   def finalized(self):
     if not self.was_aborted:
@@ -152,7 +121,6 @@ class StartPipelineHandler(MethodView):
   def post(self):
     colors = [color for color in request.form.getlist('color') if color]
     job = CountReport(
-        users.get_current_user().email(),
         GuestbookPost.kind(),
         'color',
         *colors)
