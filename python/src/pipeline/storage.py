@@ -31,7 +31,7 @@ def write_json_gcs(encoded_value, pipeline_id=None):
       the file will be created under appengine_pipeline
 
   Returns:
-    The blobstore.BlobKey for the file that was created.
+    The gcs blob name for the file that was created.
   """
   path_components = ["appengine_pipeline"]
   if pipeline_id:

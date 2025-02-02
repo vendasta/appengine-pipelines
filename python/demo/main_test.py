@@ -40,7 +40,7 @@ class CountReportTest(unittest.TestCase):
     main.GuestbookPost(color='green').put()
     job = main.CountReport(
         'foo@example.com',
-        main.GuestbookPost.kind(),
+        main.GuestbookPost._get_kind(),
         'color',
         'red', 'green', 'blue')
     job.start_test()

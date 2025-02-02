@@ -130,15 +130,15 @@ class TaskRunningMixin:
         delete_tasks([task], queue_name=self.queue_name)
 
     if require_slots_filled:
-      for slot_record in _SlotRecord.all():
+      for slot_record in _SlotRecord.query():
         self.assertEqual(_SlotRecord.FILLED, slot_record.status,
-                          '_SlotRecord = %r' % slot_record.key())
-      for barrier_record in _BarrierRecord.all():
+                          '_SlotRecord = %r' % slot_record.key)
+      for barrier_record in _BarrierRecord.query():
         self.assertEqual(_BarrierRecord.FIRED, barrier_record.status,
-                          '_BarrierRecord = %r' % barrier_record.key())
-      for pipeline_record in _PipelineRecord.all():
+                          '_BarrierRecord = %r' % barrier_record.key)
+      for pipeline_record in _PipelineRecord.query():
         self.assertEqual(_PipelineRecord.DONE, pipeline_record.status,
-                          '_PipelineRecord = %r' % pipeline_record.key())
+                          '_PipelineRecord = %r' % pipeline_record.key)
 
     return pipeline.__class__.from_id(pipeline.pipeline_id).outputs
 

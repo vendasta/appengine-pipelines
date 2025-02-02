@@ -45,7 +45,9 @@ import uuid
 from flask import abort, make_response, request
 from flask.views import MethodView
 from google.appengine.api import taskqueue, users
-from google.appengine.ext import db
+from google.appengine.ext import ndb
+from google.appengine.datastore.datastore_rpc import TransactionOptions
+
 
 # Relative imports
 from . import models, status_ui
@@ -170,7 +172,7 @@ class Slot(object):
       raise UnexpectedPipelineError('Slot with key "%s" missing a name.' %
                                     slot_key)
     if slot_key is None:
-      slot_key = db.Key.from_path(_SlotRecord.kind(), uuid.uuid4().hex)
+      slot_key = ndb.Key(_SlotRecord, uuid.uuid4().hex)
       self._exists = _TEST_MODE
     else:
       self._exists = True
@@ -211,7 +213,7 @@ class Slot(object):
     if not self.filled:
       raise SlotNotFilledError('Slot with name "%s", key "%s" not yet filled.'
                                % (self.name, self.key))
-    return self._filler_pipeline_key.name()
+    return self._filler_pipeline_key.string_id()
 
   @property
   def fill_datetime(self):
@@ -238,8 +240,7 @@ class Slot(object):
     """
     if slot_record.status == _SlotRecord.FILLED:
       self.filled = True
-      self._filler_pipeline_key = _SlotRecord.filler.get_value_for_datastore(
-          slot_record)
+      self._filler_pipeline_key = slot_record.filler
       self._fill_datetime = slot_record.fill_time
       self._value = slot_record.value
 
@@ -247,7 +248,7 @@ class Slot(object):
     """Sets the value of this slot for use in testing.
 
     Args:
-      filler_pipeline_key: The db.Key of the _PipelineRecord that filled
+      filler_pipeline_key: The ndb.Key of the _PipelineRecord that filled
         this slot.
       value: The serializable value set for this slot.
     """
@@ -314,8 +315,8 @@ class PipelineFuture(object):
       slots could not be retrived from the Datastore.
     """
     for name, slot_key in list(already_defined.items()):
-      if not isinstance(slot_key, db.Key):
-        slot_key = db.Key(slot_key)
+      if not isinstance(slot_key, ndb.Key):
+        slot_key = ndb.Key(urlsafe=slot_key)
 
       slot = self._output_dict.get(name)
       if slot is None:
@@ -330,15 +331,15 @@ class PipelineFuture(object):
         slot._exists = True
 
     if resolve_outputs:
-      slot_key_dict = dict((s.key, s) for s in list(self._output_dict.values()))
-      all_slots = db.get(list(slot_key_dict.keys()))
+      slot_key_dict = {s.key: s for s in self._output_dict.values()}
+      all_slots = ndb.get_multi(slot_key_dict.keys())
       for slot, slot_record in zip(iter(list(slot_key_dict.values())), all_slots):
         if slot_record is None:
           raise UnexpectedPipelineError(
               'Inherited output named "%s" for pipeline class "%s" is '
               'missing its Slot in the datastore: "%s"' %
               (slot.name, pipeline_name, slot.key))
-        slot = slot_key_dict[slot_record.key()]
+        slot = slot_key_dict[slot_record.key]
         slot._set_value(slot_record)
 
   def __getattr__(self, name):
@@ -454,8 +455,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     if _TEST_MODE:
       self._context = _PipelineContext('', 'default', '')
       self._root_pipeline_key = _TEST_ROOT_PIPELINE_KEY
-      self._pipeline_key = db.Key.from_path(
-          _PipelineRecord.kind(), uuid.uuid4().hex)
+      self._pipeline_key = ndb.Key(_PipelineRecord, uuid.uuid4().hex)
       self.outputs = PipelineFuture(self.output_names)
       self._context.evaluate_test(self)
 
@@ -464,14 +464,14 @@ class Pipeline(object, metaclass=_PipelineMeta):
     """Returns the ID of this Pipeline as a string or None if unknown."""
     if self._pipeline_key is None:
       return None
-    return self._pipeline_key.name()
+    return self._pipeline_key.string_id()
 
   @property
   def root_pipeline_id(self):
     """Returns root pipeline ID as a websafe string or None if unknown."""
     if self._root_pipeline_key is None:
       return None
-    return self._root_pipeline_key.name()
+    return self._root_pipeline_key.string_id()
 
   @property
   def is_root(self):
@@ -550,10 +550,10 @@ class Pipeline(object, metaclass=_PipelineMeta):
       except UnicodeDecodeError:
         pipeline_id = hashlib.sha1(pipeline_id).hexdigest()
 
-    pipeline_key = db.Key.from_path(_PipelineRecord.kind(), pipeline_id)
+    pipeline_key = ndb.Key(_PipelineRecord, pipeline_id)
 
     if pipeline_record is None:
-      pipeline_record = db.get(pipeline_key)
+      pipeline_record = pipeline_key.get()
     if pipeline_record is None:
       return None
 
@@ -584,7 +584,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     stage._set_values_internal(
         _PipelineContext('', params['queue_name'], params['base_path']),
         pipeline_key,
-        _PipelineRecord.root_pipeline.get_value_for_datastore(pipeline_record),
+        pipeline_record.root_pipeline,
         outputs,
         pipeline_record.status)
     return stage
@@ -637,7 +637,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
       except UnicodeDecodeError:
         idempotence_key = hashlib.sha1(idempotence_key).hexdigest()
 
-    pipeline_key = db.Key.from_path(_PipelineRecord.kind(), idempotence_key)
+    pipeline_key = ndb.Key(_PipelineRecord, idempotence_key)
     context = _PipelineContext('', queue_name, base_path)
     future = PipelineFuture(self.output_names, force_strict=True)
     try:
@@ -663,7 +663,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     """
     if not idempotence_key:
       idempotence_key = uuid.uuid4().hex
-    pipeline_key = db.Key.from_path(_PipelineRecord.kind(), idempotence_key)
+    pipeline_key = ndb.Key(_PipelineRecord, idempotence_key)
     context = _PipelineContext('', 'default', base_path)
     future = PipelineFuture(self.output_names, force_strict=True)
     self._set_values_internal(
@@ -770,9 +770,8 @@ class Pipeline(object, metaclass=_PipelineMeta):
           self, self.pipeline_id, message, console_url, status_links)
       return
 
-    status_key = db.Key.from_path(_StatusRecord.kind(), self.pipeline_id)
-    root_pipeline_key = db.Key.from_path(
-        _PipelineRecord.kind(), self.root_pipeline_id)
+    status_key = ndb.Key(_StatusRecord, self.pipeline_id)
+    root_pipeline_key = ndb.Key(_PipelineRecord, self.root_pipeline_id)
     status_record = _StatusRecord(
         key=status_key, root_pipeline=root_pipeline_key)
 
@@ -784,9 +783,9 @@ class Pipeline(object, metaclass=_PipelineMeta):
       if status_links:
         # Alphabeticalize the list.
         status_record.link_names = sorted(
-            db.Text(s) for s in list(status_links.keys()))
+            s for s in list(status_links.keys()))
         status_record.link_urls = [
-            db.Text(status_links[name]) for name in status_record.link_names]
+            status_links[name] for name in status_record.link_names]
 
       status_record.status_time = datetime.datetime.utcnow()
 
@@ -828,7 +827,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     if not self.async_:
       raise UnexpectedPipelineError(
           'May only call get_callback_url() method for asynchronous pipelines.')
-    kwargs['pipeline_id'] = self._pipeline_key.name()
+    kwargs['pipeline_id'] = self._pipeline_key.string_id()
     params = urllib.parse.urlencode(sorted(kwargs.items()))
     return '%s/callback?%s' % (self.base_path, params)
 
@@ -850,7 +849,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
 
     params = kwargs.get('params', {})
     kwargs['params'] = params
-    params['pipeline_id'] = self._pipeline_key.name()
+    params['pipeline_id'] = self._pipeline_key.string_id()
     kwargs['url'] = self.base_path + '/callback'
     kwargs['method'] = 'POST'
     return taskqueue.Task(*args, **kwargs)
@@ -871,9 +870,9 @@ class Pipeline(object, metaclass=_PipelineMeta):
     if not self.is_root:
       return
     task = taskqueue.Task(
-        params=dict(root_pipeline_key=self._root_pipeline_key),
+        params=dict(root_pipeline_key=self._root_pipeline_key.urlsafe().decode()),
         url=self.base_path + '/cleanup',
-        headers={'X-Ae-Pipeline-Key': self._root_pipeline_key})
+        headers={'X-Ae-Pipeline-Key': self._root_pipeline_key.urlsafe().decode()})
     taskqueue.Queue(self.queue_name).add(task)
 
   def with_params(self, **kwargs):
@@ -1011,7 +1010,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
     """Used to execute callbacks on asynchronous pipelines."""
     logging.debug('Callback %s(*%s, **%s)#%s with params: %r',
                   self._class_path, _short_repr(self.args),
-                  _short_repr(self.kwargs), self._pipeline_key.name(), kwargs)
+                  _short_repr(self.kwargs), self._pipeline_key.string_id(), kwargs)
     return self.callback(**kwargs)
 
   def _run_internal(self,
@@ -1025,7 +1024,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
         _PipelineRecord.RUN)
     logging.debug('Running %s(*%s, **%s)#%s',
                   self._class_path, _short_repr(self.args),
-                  _short_repr(self.kwargs), self._pipeline_key.name())
+                  _short_repr(self.kwargs), self._pipeline_key.string_id())
     return self.run(*self.args, **self.kwargs)
 
   def _finalized_internal(self,
@@ -1043,7 +1042,7 @@ class Pipeline(object, metaclass=_PipelineMeta):
         context, pipeline_key, root_pipeline_key, caller_output, result_status)
     logging.debug('Finalizing %s(*%r, **%r)#%s',
                   self._class_path, _short_repr(self.args),
-                  _short_repr(self.kwargs), self._pipeline_key.name())
+                  _short_repr(self.kwargs), self._pipeline_key.string_id())
     try:
       self.finalized()
     except NotImplementedError:
@@ -1181,10 +1180,10 @@ def _dereference_args(pipeline_name, args, kwargs):
   lookup_slots = set()
   for arg in itertools.chain(args, iter(list(kwargs.values()))):
     if arg['type'] == 'slot':
-      lookup_slots.add(db.Key(arg['slot_key']))
+      lookup_slots.add(ndb.Key(urlsafe=arg['slot_key']))
 
   slot_dict = {}
-  for key, slot_record in zip(lookup_slots, db.get(lookup_slots)):
+  for key, slot_record in zip(lookup_slots, ndb.get_multi(lookup_slots)):
     if slot_record is None or slot_record.status != _SlotRecord.FILLED:
       raise SlotNotFilledError(
           'Slot "%s" missing its value. From %s(*args=%s, **kwargs=%s)' %
@@ -1194,7 +1193,7 @@ def _dereference_args(pipeline_name, args, kwargs):
   arg_list = []
   for current_arg in args:
     if current_arg['type'] == 'slot':
-      arg_list.append(slot_dict[db.Key(current_arg['slot_key'])])
+      arg_list.append(slot_dict[ndb.Key(urlsafe=current_arg['slot_key'])])
     elif current_arg['type'] == 'value':
       arg_list.append(current_arg['value'])
     else:
@@ -1203,7 +1202,7 @@ def _dereference_args(pipeline_name, args, kwargs):
   kwarg_dict = {}
   for key, current_arg in list(kwargs.items()):
     if current_arg['type'] == 'slot':
-      kwarg_dict[key] = slot_dict[db.Key(current_arg['slot_key'])]
+      kwarg_dict[key] = slot_dict[ndb.Key(urlsafe=current_arg['slot_key'])]
     elif current_arg['type'] == 'value':
       kwarg_dict[key] = current_arg['value']
     else:
@@ -1261,7 +1260,7 @@ def _generate_args(pipeline, future, queue_name, base_path):
     if isinstance(current_arg, PipelineFuture):
       current_arg = current_arg.default
     if isinstance(current_arg, Slot):
-      arg_list.append({'type': 'slot', 'slot_key': str(current_arg.key)})
+      arg_list.append({'type': 'slot', 'slot_key': current_arg.key.urlsafe().decode()})
       dependent_slots.add(current_arg.key)
     else:
       arg_list.append({'type': 'value', 'value': current_arg})
@@ -1271,7 +1270,7 @@ def _generate_args(pipeline, future, queue_name, base_path):
     if isinstance(current_arg, PipelineFuture):
       current_arg = current_arg.default
     if isinstance(current_arg, Slot):
-      kwarg_dict[name] = {'type': 'slot', 'slot_key': str(current_arg.key)}
+      kwarg_dict[name] = {'type': 'slot', 'slot_key': current_arg.key.urlsafe().decode()}
       dependent_slots.add(current_arg.key)
     else:
       kwarg_dict[name] = {'type': 'value', 'value': current_arg}
@@ -1279,14 +1278,14 @@ def _generate_args(pipeline, future, queue_name, base_path):
   after_all = params['after_all']
   for other_future in future._after_all_pipelines:
     slot_key = other_future._output_dict['default'].key
-    after_all.append(str(slot_key))
+    after_all.append(slot_key.urlsafe().decode())
     dependent_slots.add(slot_key)
 
   output_slots = params['output_slots']
   output_slot_keys = set()
   for name, slot in list(future._output_dict.items()):
     output_slot_keys.add(slot.key)
-    output_slots[name] = str(slot.key)
+    output_slots[name] = slot.key.urlsafe().decode()
 
   params_encoded = json.dumps(params, cls=mr_util.JsonEncoder)
   params_text = None
@@ -1350,8 +1349,8 @@ class _PipelineContext(object):
       UnexpectedPipelineError if the _SlotRecord for the 'slot' could not
       be found in the Datastore.
     """
-    if not isinstance(filler_pipeline_key, db.Key):
-      filler_pipeline_key = db.Key(filler_pipeline_key)
+    if not isinstance(filler_pipeline_key, ndb.Key):
+      filler_pipeline_key = ndb.Key(urlsafe=filler_pipeline_key)
 
     if _TEST_MODE:
       slot._set_value_test(filler_pipeline_key, value)
@@ -1362,18 +1361,18 @@ class _PipelineContext(object):
       value_text = None
       value_gcs = None
       if len(encoded_value) <= _MAX_JSON_SIZE:
-        value_text = db.Text(encoded_value)
+        value_text = encoded_value
       else:
         # The encoded value is too big. Save it as a blob.
-        value_gcs = write_json_gcs(encoded_value, filler_pipeline_key.name())
+        value_gcs = write_json_gcs(encoded_value, filler_pipeline_key.string_id())
 
       def txn():
-        slot_record = db.get(slot.key)
+        slot_record = slot.key.get()
         if slot_record is None:
           raise UnexpectedPipelineError(
               'Tried to fill missing slot "%s" '
               'by pipeline ID "%s" with value: %r'
-              % (slot.key, filler_pipeline_key.name(), value))
+              % (slot.key, filler_pipeline_key.string_id(), value))
         # NOTE: Always take the override value here. If down-stream pipelines
         # need a consitent view of all up-stream outputs (meaning, all of the
         # outputs came from the same retry attempt of the upstream pipeline),
@@ -1388,13 +1387,12 @@ class _PipelineContext(object):
         task = taskqueue.Task(
             url=self.barrier_handler_path,
             params=dict(
-                slot_key=slot.key,
+                slot_key=slot.key.urlsafe().decode(),
                 use_barrier_indexes=True),
-            headers={'X-Ae-Slot-Key': slot.key,
-                     'X-Ae-Filler-Pipeline-Key': filler_pipeline_key})
+            headers={'X-Ae-Slot-Key': slot.key.urlsafe().decode(),
+                     'X-Ae-Filler-Pipeline-Key': filler_pipeline_key.urlsafe().decode()})
         task.add(queue_name=self.queue_name, transactional=True)
-      db.run_in_transaction_options(
-          db.create_transaction_options(propagation=db.ALLOWED), txn)
+      ndb.transaction(txn, propagation=TransactionOptions.ALLOWED)
 
     self.session_filled_output_names.add(slot.name)
 
@@ -1418,19 +1416,16 @@ class _PipelineContext(object):
     Raises:
       PipelineStatusError: If any of the barriers are in a bad state.
     """
-    if not isinstance(slot_key, db.Key):
-      slot_key = db.Key(slot_key)
+    if not isinstance(slot_key, ndb.Key):
+      slot_key = ndb.Key(urlsafe=slot_key)
     logging.debug('Notifying slot %r', slot_key)
 
     if use_barrier_indexes:
       # Please see models.py:_BarrierIndex to understand how _BarrierIndex
       # entities relate to _BarrierRecord entities.
-      query = (
-          _BarrierIndex.all(cursor=cursor, keys_only=True)
-          .ancestor(slot_key))
-      barrier_index_list = query.fetch(max_to_notify)
-      barrier_key_list = [
-          _BarrierIndex.to_barrier_key(key) for key in barrier_index_list]
+      query = _BarrierIndex.query(ancestor=slot_key)
+      barrier_index_list, cursor, _ = query.fetch_page(max_to_notify, start_cursor=ndb.Cursor(urlsafe=cursor), keys_only=True)
+      barrier_key_list = [_BarrierIndex.to_barrier_key(key) for key in barrier_index_list]
 
       # If there are task and pipeline kickoff retries it's possible for a
       # _BarrierIndex to exist for a _BarrierRecord that was not successfully
@@ -1440,7 +1435,7 @@ class _PipelineContext(object):
       # these dependent entities went through. We assume that the instigator
       # retried from scratch and somehwere there exists a good _BarrierIndex and
       # corresponding _BarrierRecord that tries to accomplish the same thing.
-      barriers = db.get(barrier_key_list)
+      barriers = ndb.get_multi(barrier_key_list)
       results = []
       for barrier_key, barrier in zip(barrier_key_list, barriers):
         if barrier is None:
@@ -1452,9 +1447,9 @@ class _PipelineContext(object):
       # TODO(user): Delete this backwards compatible codepath and
       # make use_barrier_indexes the assumed default in all cases.
       query = (
-          _BarrierRecord.all(cursor=cursor)
-          .filter('blocking_slots =', slot_key))
-      results = query.fetch(max_to_notify)
+          _BarrierRecord.query()
+          .filter(_BarrierRecord.blocking_slots == slot_key))
+      results, cursor, _ = query.fetch_page(max_to_notify, start_cursor=ndb.Cursor(urlsafe=cursor))
 
     # Fetch all blocking _SlotRecords for any potentially triggered barriers.
     blocking_slot_keys = []
@@ -1462,10 +1457,10 @@ class _PipelineContext(object):
       blocking_slot_keys.extend(barrier.blocking_slots)
 
     blocking_slot_dict = {}
-    for slot_record in db.get(blocking_slot_keys):
+    for slot_record in ndb.get_multi(blocking_slot_keys):
       if slot_record is None:
         continue
-      blocking_slot_dict[slot_record.key()] = slot_record
+      blocking_slot_dict[slot_record.key] = slot_record
 
     task_list = []
     updated_barriers = []
@@ -1476,7 +1471,7 @@ class _PipelineContext(object):
         if slot_record is None:
           raise UnexpectedPipelineError(
               'Barrier "%r" relies on Slot "%r" which is missing.' %
-              (barrier.key(), blocking_slot_key))
+              (barrier.key, blocking_slot_key))
         if slot_record.status == _SlotRecord.FILLED:
           ready_slots.append(blocking_slot_key)
 
@@ -1492,7 +1487,7 @@ class _PipelineContext(object):
           barrier.trigger_time = self._gettime()
           updated_barriers.append(barrier)
 
-        purpose = barrier.key().name()
+        purpose = barrier.key.string_id()
         if purpose == _BarrierRecord.START:
           path = self.pipeline_handler_path
           countdown = None
@@ -1501,25 +1496,25 @@ class _PipelineContext(object):
           # NOTE: Wait one second before finalization to prevent
           # contention on the _PipelineRecord entity.
           countdown = 1
-        pipeline_key = _BarrierRecord.target.get_value_for_datastore(barrier)
-        pipeline_record = db.get(pipeline_key)
-        logging.debug('Firing barrier %r', barrier.key())
+        pipeline_key = barrier.target
+        pipeline_record = pipeline_key.get()
+        logging.debug('Firing barrier %r', barrier.key)
         task_list.append(taskqueue.Task(
             url=path,
             countdown=countdown,
-            name='ae-barrier-fire-%s-%s' % (pipeline_key.name(), purpose),
-            params=dict(pipeline_key=pipeline_key, purpose=purpose),
-            headers={'X-Ae-Pipeline-Key': pipeline_key},
+            name='ae-barrier-fire-%s-%s' % (pipeline_key.string_id(), purpose),
+            params=dict(pipeline_key=pipeline_key.urlsafe().decode(), purpose=purpose),
+            headers={'X-Ae-Pipeline-Key': pipeline_key.urlsafe().decode()},
             target=pipeline_record.params.get('target', None) if pipeline_record else None))
       else:
         logging.debug('Not firing barrier %r, Waiting for slots: %r',
-                      barrier.key(), pending_slots)
+                      barrier.key, pending_slots)
 
     # Blindly overwrite _BarrierRecords that have an updated status. This is
     # acceptable because by this point all finalization barriers for
     # generator children should have already had their final outputs assigned.
     if updated_barriers:
-      db.put(updated_barriers)
+      ndb.put_multi(updated_barriers)
 
     # Task continuation with sequence number to prevent fork-bombs.
     if len(results) == max_to_notify:
@@ -1534,8 +1529,8 @@ class _PipelineContext(object):
           name='%s-ae-barrier-notify-%d' % (prefix, end),
           url=self.barrier_handler_path,
           params=dict(
-              slot_key=slot_key,
-              cursor=query.cursor(),
+              slot_key=slot_key.urlsafe().decode(),
+              cursor=cursor.urlsafe().decode() if cursor else '',
               use_barrier_indexes=use_barrier_indexes)))
 
     if task_list:
@@ -1556,22 +1551,22 @@ class _PipelineContext(object):
       True if the abort signal was sent successfully; False otherwise.
     """
     def txn():
-      pipeline_record = db.get(root_pipeline_key)
+      pipeline_record = root_pipeline_key.get()
       if pipeline_record is None:
         logging.warning(
             'Tried to abort root pipeline ID "%s" but it does not exist.',
-            root_pipeline_key.name())
-        raise db.Rollback()
+            root_pipeline_key.string_id())
+        raise ndb.Rollback()
       if pipeline_record.status == _PipelineRecord.ABORTED:
         logging.warning(
             'Tried to abort root pipeline ID "%s"; already in state: %s',
-            root_pipeline_key.name(), pipeline_record.status)
-        raise db.Rollback()
+            root_pipeline_key.string_id(), pipeline_record.status)
+        raise ndb.Rollback()
       if pipeline_record.abort_requested:
         logging.warning(
             'Tried to abort root pipeline ID "%s"; abort signal already sent.',
-            root_pipeline_key.name())
-        raise db.Rollback()
+            root_pipeline_key.string_id())
+        raise ndb.Rollback()
 
       pipeline_record.abort_requested = True
       pipeline_record.abort_message = abort_message
@@ -1579,11 +1574,11 @@ class _PipelineContext(object):
 
       task = taskqueue.Task(
           url=self.fanout_abort_handler_path,
-          params=dict(root_pipeline_key=root_pipeline_key))
+          params=dict(root_pipeline_key=root_pipeline_key.urlsafe().decode()))
       task.add(queue_name=self.queue_name, transactional=True)
       return True
 
-    return db.run_in_transaction(txn)
+    return ndb.transaction(txn)
 
   def continue_abort(self,
                      root_pipeline_key,
@@ -1597,8 +1592,8 @@ class _PipelineContext(object):
         tasks to cause child pipelines to terminate.
       max_to_notify: Used for testing.
     """
-    if not isinstance(root_pipeline_key, db.Key):
-      root_pipeline_key = db.Key(root_pipeline_key)
+    if not isinstance(root_pipeline_key, ndb.Key):
+      root_pipeline_key = ndb.Key(urlsafe=root_pipeline_key)
     # NOTE: The results of this query may include _PipelineRecord instances
     # that are not actually "reachable", meaning you cannot get to them by
     # starting at the root pipeline and following "fanned_out" onward. This
@@ -1612,9 +1607,9 @@ class _PipelineContext(object):
     # have been called instead of just one. The saving grace here is that
     # finalize must be idempotent, so this *should* be harmless.
     query = (
-        _PipelineRecord.all(cursor=cursor)
-        .filter('root_pipeline =', root_pipeline_key))
-    results = query.fetch(max_to_notify)
+        _PipelineRecord.query()
+        .filter(_PipelineRecord.root_pipeline == root_pipeline_key))
+    results, cursor, _ = query.fetch_page(max_to_notify, start_cursor=ndb.Cursor(urlsafe=cursor))
 
     task_list = []
     for pipeline_record in results:
@@ -1622,12 +1617,12 @@ class _PipelineContext(object):
           _PipelineRecord.RUN, _PipelineRecord.WAITING):
         continue
 
-      pipeline_key = pipeline_record.key()
+      pipeline_key = pipeline_record.key
       task_list.append(taskqueue.Task(
-          name='%s-%s-abort' % (self.task_name, pipeline_key.name()),
+          name='%s-%s-abort' % (self.task_name, pipeline_key.string_id()),
           url=self.abort_handler_path,
-          params=dict(pipeline_key=pipeline_key, purpose=_BarrierRecord.ABORT),
-          headers={'X-Ae-Pipeline-Key': pipeline_key}))
+          params=dict(pipeline_key=pipeline_key.urlsafe().decode(), purpose=_BarrierRecord.ABORT),
+          headers={'X-Ae-Pipeline-Key': pipeline_key.urlsafe().decode()}))
 
     # Task continuation with sequence number to prevent fork-bombs.
     if len(results) == max_to_notify:
@@ -1641,8 +1636,8 @@ class _PipelineContext(object):
       task_list.append(taskqueue.Task(
           name='%s-%d' % (prefix, end),
           url=self.fanout_abort_handler_path,
-          params=dict(root_pipeline_key=root_pipeline_key,
-                      cursor=query.cursor())))
+          params=dict(root_pipeline_key=root_pipeline_key.urlsafe().decode(),
+                      cursor=cursor.urlsafe().decode() if cursor else '')))
 
     if task_list:
       try:
@@ -1675,19 +1670,18 @@ class _PipelineContext(object):
     # the _PipelineRecord, that way we can write them all and submit in a
     # single transaction.
     for name, slot in list(pipeline.outputs._output_dict.items()):
-      slot.key = db.Key.from_path(
-          *slot.key.to_path(), **dict(parent=pipeline._pipeline_key))
+      slot.key = ndb.Key(flat=slot.key.flat(), **dict(parent=pipeline._pipeline_key))
 
     _, output_slots, params_text, params_gcs = _generate_args(
         pipeline, pipeline.outputs, self.queue_name, self.base_path)
 
-    @db.transactional(propagation=db.INDEPENDENT)
+    @ndb.transactional(propagation=TransactionOptions.INDEPENDENT)
     def txn():
-      pipeline_record = db.get(pipeline._pipeline_key)
+      pipeline_record = pipeline._pipeline_key.get()
       if pipeline_record is not None:
         raise PipelineExistsError(
             'Pipeline with idempotence key "%s" already exists; params=%s' %
-            (pipeline._pipeline_key.name(),
+            (pipeline._pipeline_key.string_id(),
              _short_repr(pipeline_record.params)))
 
       entities_to_put = []
@@ -1700,9 +1694,7 @@ class _PipelineContext(object):
           key=pipeline._pipeline_key,
           root_pipeline=pipeline._pipeline_key,
           is_root_pipeline=True,
-          # Bug in DB means we need to use the storage name here,
-          # not the local property name.
-          params=params_text,
+          params_text=params_text,
           params_gcs=params_gcs,
           start_time=self._gettime(),
           class_path=pipeline._class_path,
@@ -1714,12 +1706,12 @@ class _PipelineContext(object):
           _BarrierRecord.FINALIZE,
           output_slots))
 
-      db.put(entities_to_put)
+      ndb.put_multi(entities_to_put)
 
       task = taskqueue.Task(
           url=self.pipeline_handler_path,
-          params=dict(pipeline_key=pipeline._pipeline_key),
-          headers={'X-Ae-Pipeline-Key': pipeline._pipeline_key},
+          params=dict(pipeline_key=pipeline._pipeline_key.urlsafe().decode()),
+          headers={'X-Ae-Pipeline-Key': pipeline._pipeline_key.urlsafe().decode()},
           target=pipeline.target,
           countdown=countdown,
           eta=eta)
@@ -1878,11 +1870,11 @@ class _PipelineContext(object):
     InOrder._thread_init()
     InOrder._local._activated = False
 
-    if not isinstance(pipeline_key, db.Key):
-      pipeline_key = db.Key(pipeline_key)
-    pipeline_record = db.get(pipeline_key)
+    if not isinstance(pipeline_key, ndb.Key):
+      pipeline_key = ndb.Key(urlsafe=pipeline_key)
+    pipeline_record = pipeline_key.get()
     if pipeline_record is None:
-      logging.error('Pipeline ID "%s" does not exist.', pipeline_key.name())
+      logging.error('Pipeline ID "%s" does not exist.', pipeline_key.string_id())
       return
     if pipeline_record.status not in (
         _PipelineRecord.WAITING, _PipelineRecord.RUN):
@@ -1894,24 +1886,23 @@ class _PipelineContext(object):
         return
 
       logging.error('Pipeline ID "%s" in bad state for purpose "%s": "%s"',
-                    pipeline_key.name(), purpose or _BarrierRecord.START,
+                    pipeline_key.string_id(), purpose or _BarrierRecord.START,
                     pipeline_record.status)
       return
 
     params = pipeline_record.params
-    root_pipeline_key = \
-        _PipelineRecord.root_pipeline.get_value_for_datastore(pipeline_record)
-    default_slot_key = db.Key(params['output_slots']['default'])
+    root_pipeline_key = pipeline_record.root_pipeline
+    default_slot_key = ndb.Key(urlsafe=params['output_slots']['default'])
 
-    default_slot_record, root_pipeline_record = db.get([
+    default_slot_record, root_pipeline_record = ndb.get_multi([
         default_slot_key, root_pipeline_key])
     if default_slot_record is None:
       logging.error('Pipeline ID "%s" default slot "%s" does not exist.',
-                    pipeline_key.name(), default_slot_key)
+                    pipeline_key.string_id(), default_slot_key)
       return
     if root_pipeline_record is None:
       logging.error('Pipeline ID "%s" root pipeline ID "%s" is missing.',
-                    pipeline_key.name(), root_pipeline_key.name())
+                    pipeline_key.string_id(), root_pipeline_key.string_id())
       return
 
     # Always finalize if we're aborting so pipelines have a chance to cleanup
@@ -1932,12 +1923,12 @@ class _PipelineContext(object):
       retry_message = '%s: %s' % (e.__class__.__name__, str(e))
       logging.exception(
           'Could not locate %s#%s. %s',
-          pipeline_record.class_path, pipeline_key.name(), retry_message)
+          pipeline_record.class_path, pipeline_key.string_id(), retry_message)
       raise
 
     try:
       pipeline_func = pipeline_func_class.from_id(
-          pipeline_key.name(),
+          pipeline_key.string_id(),
           resolve_outputs=finalize_signal,
           _pipeline_record=pipeline_record)
     except SlotNotFilledError as e:
@@ -1945,14 +1936,14 @@ class _PipelineContext(object):
           'Could not resolve arguments for %s#%s. Most likely this means there '
           'is a bug in the Pipeline runtime or some intermediate data has been '
           'deleted from the Datastore. Giving up.',
-          pipeline_record.class_path, pipeline_key.name())
+          pipeline_record.class_path, pipeline_key.string_id())
       self.transition_aborted(pipeline_key)
       return
     except Exception as e:
       retry_message = '%s: %s' % (e.__class__.__name__, str(e))
       logging.exception(
           'Instantiating %s#%s raised exception. %s',
-          pipeline_record.class_path, pipeline_key.name(), retry_message)
+          pipeline_record.class_path, pipeline_key.string_id(), retry_message)
       self.transition_retry(pipeline_key, retry_message)
       if pipeline_record.params['task_retry']:
         raise
@@ -1968,7 +1959,7 @@ class _PipelineContext(object):
         and not pipeline_func.try_cancel()):
       logging.warning(
           'Could not cancel and abort mid-flight async pipeline: %r#%s',
-          pipeline_func, pipeline_key.name())
+          pipeline_func, pipeline_key.string_id())
       return
 
     if finalize_signal:
@@ -1981,7 +1972,7 @@ class _PipelineContext(object):
         # Rely on the taskqueue system to do retries.
         retry_message = '%s: %s' % (e.__class__.__name__, str(e))
         logging.exception('Finalizing %r#%s raised exception. %s',
-                          pipeline_func, pipeline_key.name(), retry_message)
+                          pipeline_func, pipeline_key.string_id(), retry_message)
         raise
       else:
         if not abort_signal:
@@ -1990,21 +1981,21 @@ class _PipelineContext(object):
 
     if abort_signal:
       logging.debug('Marking as aborted %s#%s', pipeline_func,
-                    pipeline_key.name())
+                    pipeline_key.string_id())
       self.transition_aborted(pipeline_key)
       return
 
     if pipeline_record.current_attempt != attempt:
       logging.error(
           'Received evaluation task for pipeline ID "%s" attempt %d but '
-          'current pending attempt is %d', pipeline_key.name(), attempt,
+          'current pending attempt is %d', pipeline_key.string_id(), attempt,
           pipeline_record.current_attempt)
       return
 
     if pipeline_record.current_attempt >= pipeline_record.max_attempts:
       logging.error(
           'Received evaluation task for pipeline ID "%s" on attempt %d '
-          'but that exceeds max attempts %d', pipeline_key.name(), attempt,
+          'but that exceeds max attempts %d', pipeline_key.string_id(), attempt,
           pipeline_record.max_attempts)
       return
 
@@ -2013,7 +2004,7 @@ class _PipelineContext(object):
       if self._gettime() <= retry_time:
         detail_message = (
             'Received evaluation task for pipeline ID "%s" on attempt %d, '
-            'which will not be ready until: %s' % (pipeline_key.name(),
+            'which will not be ready until: %s' % (pipeline_key.string_id(),
             pipeline_record.current_attempt, pipeline_record.next_retry_time))
         logging.warning(detail_message)
         raise UnexpectedPipelineError(detail_message)
@@ -2054,7 +2045,7 @@ class _PipelineContext(object):
             e.__class__.__name__, str(e))
         logging.exception(
             'Generator %r#%s caused exception while serializing return '
-            'value %r. %s', pipeline_func, pipeline_key.name(), result,
+            'value %r. %s', pipeline_func, pipeline_key.string_id(), result,
             retry_message)
         self.transition_retry(pipeline_key, retry_message)
         if pipeline_func.task_retry:
@@ -2068,7 +2059,7 @@ class _PipelineContext(object):
         exception = SlotNotFilledError(
             'Outputs %r for pipeline ID "%s" were never filled by "%s".' % (
             expected_outputs - found_outputs,
-            pipeline_key.name(), pipeline_func._class_path))
+            pipeline_key.string_id(), pipeline_func._class_path))
         if self.handle_run_exception(pipeline_key, pipeline_func, exception):
           raise exception
       return
@@ -2132,7 +2123,7 @@ class _PipelineContext(object):
         exception = SlotNotFilledError(
             'Outputs %r for pipeline ID "%s" were never filled by "%s".' % (
             expected_outputs - found_outputs,
-            pipeline_key.name(), pipeline_func._class_path))
+            pipeline_key.string_id(), pipeline_func._class_path))
         if self.handle_run_exception(pipeline_key, pipeline_func, exception):
           raise exception
       else:
@@ -2166,7 +2157,7 @@ class _PipelineContext(object):
             e.__class__.__name__, str(e))
         logging.exception(
             'Generator %r#%s caused exception while serializing args for '
-            'child pipeline %r. %s', pipeline_func, pipeline_key.name(),
+            'child pipeline %r. %s', pipeline_func, pipeline_key.string_id(),
             sub_stage, retry_message)
         self.transition_retry(pipeline_key, retry_message)
         if pipeline_func.task_retry:
@@ -2174,17 +2165,15 @@ class _PipelineContext(object):
         else:
           return
 
-      child_pipeline_key = db.Key.from_path(
-          _PipelineRecord.kind(), uuid.uuid4().hex)
+      child_pipeline_key = ndb.Key(
+          _PipelineRecord, uuid.uuid4().hex)
       all_output_slots.update(output_slots)
       all_children_keys.append(child_pipeline_key)
 
       child_pipeline = _PipelineRecord(
           key=child_pipeline_key,
           root_pipeline=root_pipeline_key,
-          # Bug in DB means we need to use the storage name here,
-          # not the local property name.
-          params=params_text,
+          params_text=params_text,
           params_gcs=params_gcs,
           class_path=sub_stage._class_path,
           max_attempts=sub_stage.max_attempts)
@@ -2231,7 +2220,7 @@ class _PipelineContext(object):
     barrier_indexes = barrier_entities[1:]
     entities_to_put.extend(barrier_indexes)
 
-    db.put(entities_to_put)
+    ndb.put_multi(entities_to_put)
 
     self.transition_run(pipeline_key,
                         blocking_slot_keys=all_output_slots,
@@ -2264,7 +2253,7 @@ class _PipelineContext(object):
 
     barrier = _BarrierRecord(
         parent=child_pipeline_key,
-        key_name=purpose,
+        id=purpose,
         target=child_pipeline_key,
         root_pipeline=root_pipeline_key,
         blocking_slots=blocking_slot_keys)
@@ -2273,10 +2262,10 @@ class _PipelineContext(object):
 
     for slot_key in blocking_slot_keys:
       barrier_index_path = []
-      barrier_index_path.extend(slot_key.to_path())
-      barrier_index_path.extend(child_pipeline_key.to_path())
-      barrier_index_path.extend([_BarrierIndex.kind(), purpose])
-      barrier_index_key = db.Key.from_path(*barrier_index_path)
+      barrier_index_path.extend(slot_key.flat())
+      barrier_index_path.extend(child_pipeline_key.flat())
+      barrier_index_path.extend([_BarrierIndex._get_kind(), purpose])
+      barrier_index_key = ndb.Key(flat=barrier_index_path)
       barrier_index = _BarrierIndex(
           key=barrier_index_key,
           root_pipeline=root_pipeline_key)
@@ -2299,17 +2288,17 @@ class _PipelineContext(object):
     if isinstance(e, Retry):
       retry_message = str(e)
       logging.warning('User forced retry for pipeline ID "%s" of %r: %s',
-                      pipeline_key.name(), pipeline_func, retry_message)
+                      pipeline_key.string_id(), pipeline_func, retry_message)
       self.transition_retry(pipeline_key, retry_message)
     elif isinstance(e, Abort):
       abort_message = str(e)
       logging.warning('User forced abort for pipeline ID "%s" of %r: %s',
-                      pipeline_key.name(), pipeline_func, abort_message)
+                      pipeline_key.string_id(), pipeline_func, abort_message)
       pipeline_func.abort(abort_message)
     else:
       retry_message = '%s: %s' % (e.__class__.__name__, str(e))
       logging.exception('Generator %r#%s raised exception. %s',
-                        pipeline_func, pipeline_key.name(), retry_message)
+                        pipeline_func, pipeline_key.string_id(), retry_message)
       self.transition_retry(pipeline_key, retry_message)
 
     return pipeline_func.task_retry
@@ -2344,15 +2333,15 @@ class _PipelineContext(object):
       _BarrierRecord has gone missing.
     """
     def txn():
-      pipeline_record = db.get(pipeline_key)
+      pipeline_record = pipeline_key.get()
       if pipeline_record is None:
         logging.warning('Pipeline ID "%s" cannot be marked as run. '
-                        'Does not exist.', pipeline_key.name())
-        raise db.Rollback()
+                        'Does not exist.', pipeline_key.string_id())
+        raise ndb.Rollback()
       if pipeline_record.status != _PipelineRecord.WAITING:
         logging.warning('Pipeline ID "%s" in bad state to be marked as run: %s',
-                        pipeline_key.name(), pipeline_record.status)
-        raise db.Rollback()
+                        pipeline_key.string_id(), pipeline_record.status)
+        raise ndb.Rollback()
 
       pipeline_record.status = _PipelineRecord.RUN
 
@@ -2374,7 +2363,7 @@ class _PipelineContext(object):
           child_indexes.sort()
           task = taskqueue.Task(
               url=self.fanout_handler_path,
-              params=dict(parent_key=str(pipeline_key),
+              params=dict(parent_key=pipeline_key.urlsafe().decode(),
                           child_indexes=child_indexes))
           task.add(queue_name=self.queue_name, transactional=True)
 
@@ -2387,20 +2376,20 @@ class _PipelineContext(object):
         # completed. This must happen transactionally with the enqueue of
         # the fan-out kickoff task above to ensure the child output slots and
         # the barrier blocking slots are the same.
-        barrier_key = db.Key.from_path(
-            _BarrierRecord.kind(), _BarrierRecord.FINALIZE,
+        barrier_key = ndb.Key(
+            _BarrierRecord, _BarrierRecord.FINALIZE,
             parent=pipeline_key)
-        finalize_barrier = db.get(barrier_key)
+        finalize_barrier = barrier_key.get()
         if finalize_barrier is None:
           raise UnexpectedPipelineError(
               'Pipeline ID "%s" cannot update finalize barrier. '
-              'Does not exist.' % pipeline_key.name())
+              'Does not exist.' % pipeline_key.string_id())
         else:
           finalize_barrier.blocking_slots = list(
               blocking_slot_keys.union(set(finalize_barrier.blocking_slots)))
           finalize_barrier.put()
 
-    db.run_in_transaction(txn)
+    ndb.transaction(txn)
 
   def transition_complete(self, pipeline_key):
     """Marks the given pipeline as complete.
@@ -2411,24 +2400,24 @@ class _PipelineContext(object):
       pipeline_key: db.Key of the _PipelineRecord that has completed.
     """
     def txn():
-      pipeline_record = db.get(pipeline_key)
+      pipeline_record = pipeline_key.get()
       if pipeline_record is None:
         logging.warning(
             'Tried to mark pipeline ID "%s" as complete but it does not exist.',
-            pipeline_key.name())
-        raise db.Rollback()
+            pipeline_key.string_id())
+        raise ndb.Rollback()
       if pipeline_record.status not in (
           _PipelineRecord.WAITING, _PipelineRecord.RUN):
         logging.warning(
             'Tried to mark pipeline ID "%s" as complete, found bad state: %s',
-            pipeline_key.name(), pipeline_record.status)
-        raise db.Rollback()
+            pipeline_key.string_id(), pipeline_record.status)
+        raise ndb.Rollback()
 
       pipeline_record.status = _PipelineRecord.DONE
       pipeline_record.finalized_time = self._gettime()
       pipeline_record.put()
 
-    db.run_in_transaction(txn)
+    ndb.transaction(txn)
 
   def transition_retry(self, pipeline_key, retry_message):
     """Marks the given pipeline as requiring another retry.
@@ -2440,18 +2429,18 @@ class _PipelineContext(object):
       retry_message: User-supplied message indicating the reason for the retry.
     """
     def txn():
-      pipeline_record = db.get(pipeline_key)
+      pipeline_record = pipeline_key.get()
       if pipeline_record is None:
         logging.warning(
             'Tried to retry pipeline ID "%s" but it does not exist.',
-            pipeline_key.name())
-        raise db.Rollback()
+            pipeline_key.string_id())
+        raise ndb.Rollback()
       if pipeline_record.status not in (
           _PipelineRecord.WAITING, _PipelineRecord.RUN):
         logging.warning(
             'Tried to retry pipeline ID "%s", found bad state: %s',
-            pipeline_key.name(), pipeline_record.status)
-        raise db.Rollback()
+            pipeline_key.string_id(), pipeline_record.status)
+        raise ndb.Rollback()
 
       params = pipeline_record.params
       offset_seconds = (
@@ -2464,36 +2453,34 @@ class _PipelineContext(object):
       pipeline_record.status = _PipelineRecord.WAITING
 
       if pipeline_record.current_attempt >= pipeline_record.max_attempts:
-        root_pipeline_key = (
-            _PipelineRecord.root_pipeline.get_value_for_datastore(
-                pipeline_record))
+        root_pipeline_key = pipeline_record.root_pipeline
         logging.warning(
             'Giving up on pipeline ID "%s" after %d attempt(s); causing abort '
-            'all the way to the root pipeline ID "%s"', pipeline_key.name(),
-            pipeline_record.current_attempt, root_pipeline_key.name())
+            'all the way to the root pipeline ID "%s"', pipeline_key.string_id(),
+            pipeline_record.current_attempt, root_pipeline_key.string_id())
         # NOTE: We do *not* set the status to aborted here to ensure that
         # this pipeline will be finalized before it has been marked as aborted.
         pipeline_record.abort_message = (
             'Aborting after %d attempts' % pipeline_record.current_attempt)
         task = taskqueue.Task(
             url=self.fanout_abort_handler_path,
-            params=dict(root_pipeline_key=root_pipeline_key))
+            params=dict(root_pipeline_key=root_pipeline_key.urlsafe().decode()))
         task.add(queue_name=self.queue_name, transactional=True)
       else:
         task = taskqueue.Task(
             url=self.pipeline_handler_path,
             eta=pipeline_record.next_retry_time,
-            params=dict(pipeline_key=pipeline_key,
+            params=dict(pipeline_key=pipeline_key.urlsafe().decode(),
                         purpose=_BarrierRecord.START,
                         attempt=pipeline_record.current_attempt),
-            headers={'X-Ae-Pipeline-Key': pipeline_key},
+            headers={'X-Ae-Pipeline-Key': pipeline_key.urlsafe().decode()},
             target=pipeline_record.params.get('target', None)
               if pipeline_record else None)
         task.add(queue_name=self.queue_name, transactional=True)
 
       pipeline_record.put()
 
-    db.run_in_transaction(txn)
+    ndb.transaction(txn)
 
   def transition_aborted(self, pipeline_key):
     """Makes the given pipeline as having aborted.
@@ -2504,24 +2491,24 @@ class _PipelineContext(object):
       pipeline_key: db.Key of the _PipelineRecord that needs to be retried.
     """
     def txn():
-      pipeline_record = db.get(pipeline_key)
+      pipeline_record = pipeline_key.get()
       if pipeline_record is None:
         logging.warning(
             'Tried to abort pipeline ID "%s" but it does not exist.',
-            pipeline_key.name())
-        raise db.Rollback()
+            pipeline_key.string_id())
+        raise ndb.Rollback()
       if pipeline_record.status not in (
           _PipelineRecord.WAITING, _PipelineRecord.RUN):
         logging.warning(
             'Tried to abort pipeline ID "%s", found bad state: %s',
-            pipeline_key.name(), pipeline_record.status)
-        raise db.Rollback()
+            pipeline_key.string_id(), pipeline_record.status)
+        raise ndb.Rollback()
 
       pipeline_record.status = _PipelineRecord.ABORTED
       pipeline_record.finalized_time = self._gettime()
       pipeline_record.put()
 
-    db.run_in_transaction(txn)
+    ndb.transaction(txn)
 
 ################################################################################
 
@@ -2591,23 +2578,23 @@ class _FanoutHandler(MethodView):
     parent_key = request.values.get('parent_key')
     child_indexes = [int(x) for x in request.values.getlist('child_indexes')]
     if parent_key:
-      parent_key = db.Key(parent_key)
-      parent = db.get(parent_key)
+      parent_key = ndb.Key(urlsafe=parent_key)
+      parent = parent_key.get()
       for index in child_indexes:
-        all_pipeline_keys.add(str(parent.fanned_out[index]))
+        all_pipeline_keys.add(parent.fanned_out[index].urlsafe().decode())
 
     all_tasks = []
-    all_pipelines = db.get([db.Key(pipeline_key) for pipeline_key in all_pipeline_keys])
+    all_pipelines = ndb.get_multi([ndb.Key(urlsafe=pipeline_key) for pipeline_key in all_pipeline_keys])
     for child_pipeline in all_pipelines:
       if child_pipeline is None:
         continue
-      pipeline_key = str(child_pipeline.key())
+      pipeline_key = child_pipeline.key
       all_tasks.append(taskqueue.Task(
           url=context.pipeline_handler_path,
-          params=dict(pipeline_key=pipeline_key),
+          params=dict(pipeline_key=pipeline_key.urlsafe().decode()),
           target=child_pipeline.params.get('target', None) if child_pipeline else None,
-          headers={'X-Ae-Pipeline-Key': pipeline_key},
-          name='ae-pipeline-fan-out-' + child_pipeline.key().name()))
+          headers={'X-Ae-Pipeline-Key': pipeline_key.urlsafe().decode()},
+          name='ae-pipeline-fan-out-' + child_pipeline.key.string_id()))
 
     batch_size = 100  # Limit of taskqueue API bulk add.
     for i in range(0, len(all_tasks), batch_size):
@@ -2626,31 +2613,41 @@ class _CleanupHandler(MethodView):
     if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       return abort(403)
 
-    root_pipeline_key = db.Key(request.values.get('root_pipeline_key'))
-    logging.debug('Cleaning up root_pipeline_key=%r', root_pipeline_key)
+    root_pipeline_key = ndb.Key(urlsafe=request.values.get('root_pipeline_key'))
+    logging.debug('Cleaning up root_pipeline_key=%r', root_pipeline_key.urlsafe().decode())
 
     # TODO(user): Accumulate all BlobKeys from _PipelineRecord and
     # _SlotRecord entities and delete them.
     pipeline_keys = (
-        _PipelineRecord.all(keys_only=True)
-        .filter('root_pipeline =', root_pipeline_key))
-    db.delete(pipeline_keys)
+        _PipelineRecord.query()
+        .filter(_PipelineRecord.root_pipeline == root_pipeline_key)
+        .fetch(keys_only=True)
+    )
+    ndb.delete_multi(pipeline_keys)
     slot_keys = (
-        _SlotRecord.all(keys_only=True)
-        .filter('root_pipeline =', root_pipeline_key))
-    db.delete(slot_keys)
+        _SlotRecord.query()
+        .filter(_PipelineRecord.root_pipeline == root_pipeline_key)
+        .fetch(keys_only=True)
+      )
+    ndb.delete_multi(slot_keys)
     barrier_keys = (
-        _BarrierRecord.all(keys_only=True)
-        .filter('root_pipeline =', root_pipeline_key))
-    db.delete(barrier_keys)
+        _BarrierRecord.query()
+        .filter(_PipelineRecord.root_pipeline == root_pipeline_key)
+        .fetch(keys_only=True)
+    )
+    ndb.delete_multi(barrier_keys)
     status_keys = (
-        _StatusRecord.all(keys_only=True)
-        .filter('root_pipeline =', root_pipeline_key))
-    db.delete(status_keys)
+        _StatusRecord.query()
+        .filter(_PipelineRecord.root_pipeline == root_pipeline_key)
+        .fetch(keys_only=True)
+    )
+    ndb.delete_multi(status_keys)
     barrier_index_keys = (
-        _BarrierIndex.all(keys_only=True)
-        .filter('root_pipeline =', root_pipeline_key))
-    db.delete(barrier_index_keys)
+        _BarrierIndex.query()
+        .filter(_PipelineRecord.root_pipeline == root_pipeline_key)
+        .fetch(keys_only=True)
+    )
+    ndb.delete_multi(barrier_index_keys)
     return "", 200
 
 
@@ -2691,8 +2688,8 @@ class _CallbackHandler(MethodView):
     if not pipeline_id:
       raise _CallbackTaskError('"pipeline_id" parameter missing.')
 
-    pipeline_key = db.Key.from_path(_PipelineRecord.kind(), pipeline_id)
-    pipeline_record = db.get(pipeline_key)
+    pipeline_key = ndb.Key(_PipelineRecord, pipeline_id)
+    pipeline_record = pipeline_key.get()
     if pipeline_record is None:
       raise _CallbackTaskError(
           'Pipeline ID "%s" for callback does not exist.' % pipeline_id)
@@ -2722,7 +2719,7 @@ class _CallbackHandler(MethodView):
     kwargs = {}
     for key in request.values.to_dict().keys():
         if key != 'pipeline_id':
-            kwargs[str(key)] = request.values.get(key)
+            kwargs[key] = request.values.get(key)
 
     def perform_callback():
       stage = pipeline_func_class.from_id(pipeline_id)
@@ -2734,10 +2731,8 @@ class _CallbackHandler(MethodView):
     # callback_xg_transaction is a 3-valued setting (None=no trans,
     # False=1-eg-trans, True=xg-trans)
     if pipeline_func_class._callback_xg_transaction is not None:
-      transaction_options = db.create_transaction_options(
-          xg=pipeline_func_class._callback_xg_transaction)
-      callback_result = db.run_in_transaction_options(transaction_options,
-                                                      perform_callback)
+      callback_result = ndb.transaction(perform_callback, 
+                                        xg=pipeline_func_class._callback_xg_transaction)
     else:
       callback_result = perform_callback()
 
@@ -2834,18 +2829,17 @@ def _get_internal_status(pipeline_key=None,
   pipeline_record = pipeline_dict.get(pipeline_key)
   if pipeline_record is None:
     raise PipelineStatusError(
-        'Could not find pipeline ID "%s"' % pipeline_key.name())
+        'Could not find pipeline ID "%s"' % pipeline_key.string_id())
 
   params = pipeline_record.params
-  root_pipeline_key = \
-      _PipelineRecord.root_pipeline.get_value_for_datastore(pipeline_record)
-  default_slot_key = db.Key(params['output_slots']['default'])
-  start_barrier_key = db.Key.from_path(
-      _BarrierRecord.kind(), _BarrierRecord.START, parent=pipeline_key)
-  finalize_barrier_key = db.Key.from_path(
-      _BarrierRecord.kind(), _BarrierRecord.FINALIZE, parent=pipeline_key)
-  status_record_key = db.Key.from_path(
-      _StatusRecord.kind(), pipeline_key.name())
+  root_pipeline_key = pipeline_record.root_pipeline
+  default_slot_key = ndb.Key(urlsafe=params['output_slots']['default'])
+  start_barrier_key = ndb.Key(
+      _BarrierRecord, _BarrierRecord.START, parent=pipeline_key)
+  finalize_barrier_key = ndb.Key(
+      _BarrierRecord, _BarrierRecord.FINALIZE, parent=pipeline_key)
+  status_record_key = ndb.Key(
+      _StatusRecord, pipeline_key.string_id())
 
   start_barrier = barrier_dict.get(start_barrier_key)
   finalize_barrier = barrier_dict.get(finalize_barrier_key)
@@ -2854,20 +2848,20 @@ def _get_internal_status(pipeline_key=None,
   if finalize_barrier is None:
     raise PipelineStatusError(
         'Finalization barrier missing for pipeline ID "%s"' %
-        pipeline_key.name())
+        pipeline_key.string_id())
   if default_slot is None:
     raise PipelineStatusError(
         'Default output slot with key=%s missing for pipeline ID "%s"' % (
-        default_slot_key, pipeline_key.name()))
+        default_slot_key.urlsafe().decode(), pipeline_key.string_id()))
 
   output = {
     'classPath': pipeline_record.class_path,
     'args': list(params['args']),
     'kwargs': params['kwargs'].copy(),
     'outputs': params['output_slots'].copy(),
-    'children': [key.name() for key in pipeline_record.fanned_out],
+    'children': [key.string_id() for key in pipeline_record.fanned_out],
     'queueName': params['queue_name'],
-    'afterSlotKeys': [str(key) for key in params['after_all']],
+    'afterSlotKeys': [key for key in params['after_all']],
     'currentAttempt': pipeline_record.current_attempt + 1,
     'maxAttempts': pipeline_record.max_attempts,
     'backoffSeconds': pipeline_record.params['backoff_seconds'],
@@ -2970,20 +2964,19 @@ def _get_internal_slot(slot_key=None,
   slot_record = slot_dict.get(slot_key)
   if slot_record is None:
     raise PipelineStatusError(
-        'Could not find data for output slot key "%s".' % slot_key)
+        'Could not find data for output slot key "%s".' % slot_key.urlsafe().decode())
 
   output = {}
   if slot_record.status == _SlotRecord.FILLED:
     output['status'] = 'filled'
     output['fillTimeMs'] = _get_timestamp_ms(slot_record.fill_time)
     output['value'] = slot_record.value
-    filler_pipeline_key = (
-        _SlotRecord.filler.get_value_for_datastore(slot_record))
+    filler_pipeline_key = slot_record.filler
   else:
     output['status'] = 'waiting'
 
   if filler_pipeline_key:
-    output['fillerPipelineId'] = filler_pipeline_key.name()
+    output['fillerPipelineId'] = filler_pipeline_key.string_id()
 
   return output
 
@@ -3003,20 +2996,19 @@ def get_status_tree(root_pipeline_id):
   Raises:
     PipelineStatusError if any input is bad.
   """
-  root_pipeline_key = db.Key.from_path(_PipelineRecord.kind(), root_pipeline_id)
-  root_pipeline_record = db.get(root_pipeline_key)
+  root_pipeline_key = ndb.Key(_PipelineRecord, root_pipeline_id)
+  root_pipeline_record = root_pipeline_key.get()
   if root_pipeline_record is None:
     raise PipelineStatusError(
         'Could not find pipeline ID "%s"' % root_pipeline_id)
 
   # If the supplied root_pipeline_id is not actually the root pipeline that's
   # okay. We'll find the real root and override the value they passed in.
-  actual_root_key = _PipelineRecord.root_pipeline.get_value_for_datastore(
-      root_pipeline_record)
+  actual_root_key = root_pipeline_record.root_pipeline
   if actual_root_key != root_pipeline_key:
     root_pipeline_key = actual_root_key
-    root_pipeline_id = root_pipeline_key.id_or_name()
-    root_pipeline_record = db.get(root_pipeline_key)
+    root_pipeline_id = root_pipeline_key.string_id()
+    root_pipeline_record = root_pipeline_key.get()
     if not root_pipeline_record:
       raise PipelineStatusError(
           'Could not find pipeline ID "%s"' % root_pipeline_id)
@@ -3024,17 +3016,17 @@ def get_status_tree(root_pipeline_id):
   # Run all queries asynchronously.
   queries = {}
   for model in (_PipelineRecord, _SlotRecord, _BarrierRecord, _StatusRecord):
-    queries[model] = model.all().filter(
-        'root_pipeline =', root_pipeline_key).run(batch_size=1000)
+    queries[model] = model.query().filter(
+        _PipelineRecord.root_pipeline == root_pipeline_key).fetch(1000)
 
   found_pipeline_dict = dict(
-      (stage.key(), stage) for stage in queries[_PipelineRecord])
+      (stage.key, stage) for stage in queries[_PipelineRecord])
   found_slot_dict = dict(
-      (slot.key(), slot) for slot in queries[_SlotRecord])
+      (slot.key, slot) for slot in queries[_SlotRecord])
   found_barrier_dict = dict(
-      (barrier.key(), barrier) for barrier in queries[_BarrierRecord])
+      (barrier.key, barrier) for barrier in queries[_BarrierRecord])
   found_status_dict = dict(
-      (status.key(), status) for status in queries[_StatusRecord])
+      (status.key, status) for status in queries[_StatusRecord])
 
   # Breadth-first traversal of _PipelineRecord instances by following
   # _PipelineRecord.fanned_out property values.
@@ -3052,7 +3044,7 @@ def get_status_tree(root_pipeline_id):
         if child_pipeline_record is None:
           raise PipelineStatusError(
               'Pipeline ID "%s" points to child ID "%s" which does not exist.'
-              % (pipeline_record.key().name(), child_pipeline_key.name()))
+              % (pipeline_record.key.string_id(), child_pipeline_key.string_id()))
         expand_stack.append(child_pipeline_record)
         valid_pipeline_keys.add(child_pipeline_key)
 
@@ -3061,7 +3053,7 @@ def get_status_tree(root_pipeline_id):
         # be the filler.
         child_outputs = child_pipeline_record.params['output_slots']
         for output_slot_key in list(child_outputs.values()):
-          slot_filler_dict[db.Key(output_slot_key)] = child_pipeline_key
+          slot_filler_dict[ndb.Key(urlsafe=output_slot_key)] = child_pipeline_key
 
   output = {
     'rootPipelineId': root_pipeline_id,
@@ -3072,7 +3064,7 @@ def get_status_tree(root_pipeline_id):
   for pipeline_key in list(found_pipeline_dict.keys()):
     if pipeline_key not in valid_pipeline_keys:
       continue
-    output['pipelines'][pipeline_key.name()] = _get_internal_status(
+    output['pipelines'][pipeline_key.string_id()] = _get_internal_status(
         pipeline_key=pipeline_key,
         pipeline_dict=found_pipeline_dict,
         slot_dict=found_slot_dict,
@@ -3080,7 +3072,7 @@ def get_status_tree(root_pipeline_id):
         status_dict=found_status_dict)
 
   for slot_key, filler_pipeline_key in list(slot_filler_dict.items()):
-    output['slots'][str(slot_key)] = _get_internal_slot(
+    output['slots'][slot_key.urlsafe().decode()] = _get_internal_slot(
         slot_key=slot_key,
         filler_pipeline_key=filler_pipeline_key,
         slot_dict=found_slot_dict)
@@ -3117,57 +3109,55 @@ def get_root_list(class_path=None, cursor=None, count=50):
   Raises:
     PipelineStatusError if any input is bad.
   """
-  query = _PipelineRecord.all(cursor=cursor)
+  query = _PipelineRecord.query()
   if class_path:
-    query.filter('class_path =', class_path)
-  query.filter('is_root_pipeline =', True)
-  query.order('-start_time')
+    query = query.filter(_PipelineRecord.class_path == class_path)
+  query = query.filter(_PipelineRecord.is_root_pipeline == True)
+  query = query.order(-_PipelineRecord.start_time)
 
-  root_list = query.fetch(count)
+  root_list, cursor, more = query.fetch_page(count, start_cursor=ndb.Cursor(urlsafe=cursor))
 
   fetch_list = []
   for pipeline_record in root_list:
-    fetch_list.append(db.Key(pipeline_record.params['output_slots']['default']))
-    fetch_list.append(db.Key.from_path(
-        _BarrierRecord.kind(), _BarrierRecord.FINALIZE,
-        parent=pipeline_record.key()))
-    fetch_list.append(db.Key.from_path(
-        _StatusRecord.kind(), pipeline_record.key().name()))
+    fetch_list.append(ndb.Key(urlsafe=pipeline_record.params['output_slots']['default']))
+    fetch_list.append(ndb.Key(
+        _BarrierRecord, _BarrierRecord.FINALIZE,
+        parent=pipeline_record.key))
+    fetch_list.append(ndb.Key(
+        _StatusRecord, pipeline_record.key.string_id()))
 
-  pipeline_dict = dict((stage.key(), stage) for stage in root_list)
+  pipeline_dict = dict((stage.key, stage) for stage in root_list)
   slot_dict = {}
   barrier_dict = {}
   status_dict = {}
-  for entity in db.get(fetch_list):
+  for entity in ndb.get_multi(fetch_list):
     if isinstance(entity, _BarrierRecord):
-      barrier_dict[entity.key()] = entity
+      barrier_dict[entity.key] = entity
     elif isinstance(entity, _SlotRecord):
-      slot_dict[entity.key()] = entity
+      slot_dict[entity.key] = entity
     elif isinstance(entity, _StatusRecord):
-      status_dict[entity.key()] = entity
+      status_dict[entity.key] = entity
 
   results = []
   for pipeline_record in root_list:
     try:
       output = _get_internal_status(
-          pipeline_record.key(),
+          pipeline_record.key,
           pipeline_dict=pipeline_dict,
           slot_dict=slot_dict,
           barrier_dict=barrier_dict,
           status_dict=status_dict)
-      output['pipelineId'] = pipeline_record.key().name()
+      output['pipelineId'] = pipeline_record.key.string_id()
       results.append(output)
     except PipelineStatusError as e:
       output = {'status': str(e)}
       output['classPath'] = ''
-      output['pipelineId'] = pipeline_record.key().name()
+      output['pipelineId'] = pipeline_record.key.string_id()
       results.append(output)
 
   result_dict = {}
-  cursor = query.cursor()
-  query.with_cursor(cursor)
-  if query.get(keys_only=True):
-    result_dict.update(cursor=cursor)
+  if more:
+    result_dict.update(cursor=cursor.urlsafe().decode())
   result_dict.update(pipelines=results)
   return result_dict
 
