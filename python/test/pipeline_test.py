@@ -34,7 +34,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 import testutil
 from flask import Flask
-from google.appengine.ext import db, testbed
+from google.appengine.ext import ndb, testbed
+from google.appengine.api.datastore_errors import BadRequestError
 
 from pipeline import common, pipeline, storage, testing as test_shared
 
@@ -57,9 +58,10 @@ class TestBase(testutil.TestSetupMixin, unittest.TestCase):
     # Then activate the testbed, which prepares the service stubs for use.
     self.testbed.activate()
     # Next, declare which service stubs you want to use.
-    self.testbed.init_blobstore_stub()
     self.testbed.init_urlfetch_stub()
     self.testbed.init_app_identity_stub()
+    self.testbed.init_datastore_v3_stub()
+    ndb.get_context().clear_cache()
 
     self.storageData = {}
     def _write_json_gcs(encoded_value, pipeline_id=None):
@@ -96,7 +98,7 @@ class SlotTest(TestBase):
     self.assertRaises(pipeline.SlotNotFilledError, lambda: slot.filler)
     self.assertRaises(pipeline.SlotNotFilledError, lambda: slot.fill_datetime)
 
-    slot_key = db.Key.from_path('mykind', 'mykey')
+    slot_key = ndb.Key('mykind', 'mykey')
     slot = pipeline.Slot(name='stuff', slot_key=slot_key)
     self.assertEqual('stuff', slot.name)
     self.assertEqual(slot_key, slot.key)
@@ -107,12 +109,12 @@ class SlotTest(TestBase):
 
   def testSlotRecord(self):
     """Tests filling Slot attributes with a _SlotRecord."""
-    slot_key = db.Key.from_path('myslot', 'mykey')
-    filler_key = db.Key.from_path('myfiller', 'mykey')
+    slot_key = ndb.Key(_SlotRecord, 'myslot',)
+    filler_key = ndb.Key(_PipelineRecord, 'myfiller')
     now = datetime.datetime.utcnow()
     slot_record = _SlotRecord(
         filler=filler_key,
-        value=json.dumps('my value'),
+        value_text=json.dumps('my value'),
         status=_SlotRecord.FILLED,
         fill_time=now)
 
@@ -121,13 +123,13 @@ class SlotTest(TestBase):
     self.assertTrue(slot._exists)
     self.assertTrue(slot.filled)
     self.assertEqual('my value', slot.value)
-    self.assertEqual(filler_key.name(), slot.filler)
+    self.assertEqual(filler_key.string_id(), slot.filler)
     self.assertEqual(now, slot.fill_datetime)
 
   def testValueTestMode(self):
     """Tests filling Slot attributes for test mode."""
-    slot_key = db.Key.from_path('myslot', 'mykey')
-    filler_key = db.Key.from_path('myfiller', 'mykey')
+    slot_key = ndb.Key('myslot', 'mykey')
+    filler_key = ndb.Key('myfiller', 'mykey')
     now = datetime.datetime.utcnow()
     value = 'my value'
 
@@ -136,7 +138,7 @@ class SlotTest(TestBase):
     self.assertTrue(slot._exists)
     self.assertTrue(slot.filled)
     self.assertEqual('my value', slot.value)
-    self.assertEqual(filler_key.name(), slot.filler)
+    self.assertEqual(filler_key.string_id(), slot.filler)
     self.assertTrue(isinstance(slot.fill_datetime, datetime.datetime))
 
 
@@ -192,20 +194,20 @@ class PipelineFutureTest(TestBase):
     """Tests _inherit_outputs without resolving their values."""
     future = pipeline.PipelineFuture([])
     already_defined = {
-        'one': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist1')),
-        'two': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist2')),
-        'three': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist3')),
-        'default': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist4')),
+        'one': ndb.Key(_SlotRecord, 'does not exist1').urlsafe().decode(),
+        'two': ndb.Key(_SlotRecord, 'does not exist2').urlsafe().decode(),
+        'three': ndb.Key(_SlotRecord, 'does not exist3').urlsafe().decode(),
+        'default': ndb.Key(_SlotRecord, 'does not exist4').urlsafe().decode(),
     }
     future = pipeline.PipelineFuture([])
     self.assertFalse(future.default._exists)
 
     future._inherit_outputs('mypipeline', already_defined)
 
-    self.assertEqual(already_defined['one'], str(future.one.key))
-    self.assertEqual(already_defined['two'], str(future.two.key))
-    self.assertEqual(already_defined['three'], str(future.three.key))
-    self.assertEqual(already_defined['default'], str(future.default.key))
+    self.assertEqual(already_defined['one'], future.one.key.urlsafe().decode())
+    self.assertEqual(already_defined['two'], future.two.key.urlsafe().decode())
+    self.assertEqual(already_defined['three'], future.three.key.urlsafe().decode())
+    self.assertEqual(already_defined['default'], future.default.key.urlsafe().decode())
 
     self.assertTrue(future.one._exists)
     self.assertTrue(future.two._exists)
@@ -215,10 +217,10 @@ class PipelineFutureTest(TestBase):
   def testInheritOutputsStrictMode(self):
     """Tests _inherit_outputs without resolving their values in strict mode."""
     already_defined = {
-        'one': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist1')),
-        'two': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist2')),
-        'three': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist3')),
-        'default': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist4')),
+        'one': ndb.Key(_SlotRecord, 'does not exist1').urlsafe().decode(),
+        'two': ndb.Key(_SlotRecord, 'does not exist2').urlsafe().decode(),
+        'three': ndb.Key(_SlotRecord, 'does not exist3').urlsafe().decode(),
+        'default': ndb.Key(_SlotRecord, 'does not exist4').urlsafe().decode(),
     }
     future = pipeline.PipelineFuture(['one', 'two', 'three'])
 
@@ -229,10 +231,10 @@ class PipelineFutureTest(TestBase):
 
     future._inherit_outputs('mypipeline', already_defined)
 
-    self.assertEqual(already_defined['one'], str(future.one.key))
-    self.assertEqual(already_defined['two'], str(future.two.key))
-    self.assertEqual(already_defined['three'], str(future.three.key))
-    self.assertEqual(already_defined['default'], str(future.default.key))
+    self.assertEqual(already_defined['one'], future.one.key.urlsafe().decode())
+    self.assertEqual(already_defined['two'], future.two.key.urlsafe().decode())
+    self.assertEqual(already_defined['three'], future.three.key.urlsafe().decode())
+    self.assertEqual(already_defined['default'], future.default.key.urlsafe().decode())
 
     self.assertTrue(future.one._exists)
     self.assertTrue(future.two._exists)
@@ -242,11 +244,11 @@ class PipelineFutureTest(TestBase):
   def testInheritOutputsStrictModeUndeclared(self):
     """Tests _inherit_outputs when an inherited output has not been declared."""
     already_defined = {
-        'one': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist1')),
-        'two': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist2')),
-        'three': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist3')),
-        'default': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist4')),
-        'five': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist5')),
+        'one': ndb.Key(_SlotRecord, 'does not exist1').urlsafe().decode(),
+        'two': ndb.Key(_SlotRecord, 'does not exist2').urlsafe().decode(),
+        'three': ndb.Key(_SlotRecord, 'does not exist3').urlsafe().decode(),
+        'default': ndb.Key(_SlotRecord, 'does not exist4').urlsafe().decode(),
+        'five': ndb.Key(_SlotRecord, 'does not exist5').urlsafe().decode(),
     }
     future = pipeline.PipelineFuture(['one', 'two', 'three'])
     self.assertRaises(pipeline.UnexpectedPipelineError, future._inherit_outputs,
@@ -255,17 +257,17 @@ class PipelineFutureTest(TestBase):
   def testInheritOutputsResolveValues(self):
     """Tests _inherit_outputs with resolving their current values."""
     one = _SlotRecord(
-        value=json.dumps('hi one'),
+        value_text=json.dumps('hi one'),
         status=_SlotRecord.FILLED,
         fill_time=datetime.datetime.utcnow(),
-        filler=db.Key.from_path('mykind', 'mykey1'))
+        filler=ndb.Key(_PipelineRecord, 'mykey1'))
     one.put()
 
     two = _SlotRecord(
-        value=json.dumps('hi two'),
+        value_text=json.dumps('hi two'),
         status=_SlotRecord.FILLED,
         fill_time=datetime.datetime.utcnow(),
-        filler=db.Key.from_path('mykind', 'mykey2'))
+        filler=ndb.Key(_PipelineRecord, 'mykey2'))
     two.put()
 
     three = _SlotRecord()
@@ -275,10 +277,10 @@ class PipelineFutureTest(TestBase):
     default.put()
 
     already_defined = {
-        'one': str(one.key()),
-        'two': str(two.key()),
-        'three': str(three.key()),
-        'default': str(default.key()),
+        'one': one.key.urlsafe().decode(),
+        'two': two.key.urlsafe().decode(),
+        'three': three.key.urlsafe().decode(),
+        'default': default.key.urlsafe().decode(),
     }
     future = pipeline.PipelineFuture([])
     future._inherit_outputs('mypipeline', already_defined, resolve_outputs=True)
@@ -290,7 +292,7 @@ class PipelineFutureTest(TestBase):
   def testInheritOutputsResolveValuesMissing(self):
     """Tests when output _SlotRecords are missing for inherited outputs."""
     already_defined = {
-        'four': str(db.Key.from_path(_SlotRecord.kind(), 'does not exist')),
+        'four': ndb.Key(_SlotRecord, 'does not exist').urlsafe().decode(),
     }
     future = pipeline.PipelineFuture([])
     self.assertRaises(pipeline.UnexpectedPipelineError, future._inherit_outputs,
@@ -380,7 +382,7 @@ class PipelineTest(TestBase):
     self.assertEqual(stage.pipeline_id, stage.root_pipeline_id)
     self.assertTrue(stage.is_root)
 
-    pipeline_record = _PipelineRecord.get_by_key_name(stage.pipeline_id)
+    pipeline_record = _PipelineRecord.get_by_id(stage.pipeline_id)
     self.assertTrue(pipeline_record is not None)
     self.assertEqual(f'{NothingPipeline.__module__}.NothingPipeline', pipeline_record.class_path)
     self.assertEqual(_PipelineRecord.WAITING, pipeline_record.status)
@@ -400,14 +402,13 @@ class PipelineTest(TestBase):
     self.assertTrue(isinstance(pipeline_record.start_time, datetime.datetime))
 
     # Verify that all output slots are present.
-    slot_records = list(_SlotRecord.all().filter(
-      'root_pipeline =',
-      db.Key.from_path(_PipelineRecord.kind(), stage.pipeline_id)))
-    slot_dict = dict((s.key(), s) for s in slot_records)
+    slot_records = list(_SlotRecord.query(
+      _SlotRecord.root_pipeline == ndb.Key(_PipelineRecord, stage.pipeline_id)))
+    slot_dict = dict((s.key, s) for s in slot_records)
     self.assertEqual(3, len(slot_dict))
 
     for outputs in list(params['output_slots'].values()):
-      slot_record = slot_dict[db.Key(outputs)]
+      slot_record = slot_dict[ndb.Key(urlsafe=outputs)]
       self.assertEqual(_SlotRecord.WAITING, slot_record.status)
 
     # Verify that trying to add another output slot will fail.
@@ -423,8 +424,7 @@ class PipelineTest(TestBase):
     self.assertEqual(1, len(task_list))
     task = task_list[0]
     self.assertEqual(
-        {'pipeline_key': [str(db.Key.from_path(
-            _PipelineRecord.kind(), stage.pipeline_id))]},
+        {'pipeline_key': [ndb.Key(_PipelineRecord, stage.pipeline_id).urlsafe().decode()]},
         task['params'])
     self.assertEqual('/_ah/pipeline/run', task['url'])
 
@@ -441,7 +441,7 @@ class PipelineTest(TestBase):
     self.assertEqual(0, len(test_shared.get_tasks()))
     self.assertEqual('/_ah/pipeline/run', task.url)
     self.assertEqual(
-        'pipeline_key=%s' % db.Key.from_path(_PipelineRecord.kind(), 'banana'),
+        'pipeline_key=%s' % ndb.Key(_PipelineRecord, 'banana').urlsafe().decode(),
         task.payload)
     self.assertTrue(task.name is None)
 
@@ -516,7 +516,7 @@ class PipelineTest(TestBase):
     stage.backoff_seconds = 1234.56
     stage.backoff_factor = 2.718
     stage.start(idempotence_key='banana')
-    pipeline_record = _PipelineRecord.get_by_key_name(stage.pipeline_id)
+    pipeline_record = _PipelineRecord.get_by_id(stage.pipeline_id)
     self.assertTrue(pipeline_record is not None)
     self.assertEqual(15, pipeline_record.params['max_attempts'])
     self.assertEqual(1234.56, pipeline_record.params['backoff_seconds'])
@@ -595,7 +595,7 @@ class PipelineTest(TestBase):
     stage = NothingPipeline()
     stage.start()
 
-    pipeline_record = _PipelineRecord.get_by_key_name(stage.pipeline_id)
+    pipeline_record = _PipelineRecord.get_by_id(stage.pipeline_id)
     pipeline_record.class_path = 'does_not_exist.or_something'
     pipeline_record.put()
 
@@ -645,16 +645,16 @@ class PipelineTest(TestBase):
     """Tests errors that happen when filling slots."""
     stage = NothingPipeline('one', 'two', three='red', four=1234)
     stage.start(queue_name='other', base_path='/other', idempotence_key='meep')
-    self.assertRaises(pipeline.UnexpectedPipelineError,
-                      stage.fill, object(), 'red')
+    with self.assertRaises(pipeline.UnexpectedPipelineError):
+      stage.fill(object(), 'red')
 
     slot = pipeline.Slot(name='one')
-    self.assertRaises(pipeline.SlotNotDeclaredError,
-                      stage.fill, slot, 'red')
+    with self.assertRaises(pipeline.SlotNotDeclaredError):
+      stage.fill(slot, 'red')
 
-    db.delete(stage.outputs.one.key)
-    self.assertRaises(pipeline.UnexpectedPipelineError,
-                      stage.fill, stage.outputs.one, 'red')
+    stage.outputs.one.key.delete()
+    with self.assertRaises(pipeline.UnexpectedPipelineError):
+      stage.fill(stage.outputs.one, 'red')
 
   def testComplete(self):
     """Tests asynchronous completion of the pipeline."""
@@ -823,7 +823,7 @@ class PipelineTest(TestBase):
         message='This is my message',
         console_url='/path/to/the/console',
         status_links=dict(first='/one', second='/two', third='/three'))
-    record_list = list(_StatusRecord.all())
+    record_list = list(_StatusRecord.query().fetch())
     self.assertEqual(1, len(record_list))
     status_record = record_list[0]
 
@@ -835,7 +835,7 @@ class PipelineTest(TestBase):
 
     # Now resetting it will overwrite all fields.
     stage.set_status(console_url='/another_console')
-    after_status_record = db.get(status_record.key())
+    after_status_record = status_record.key.get()
 
     self.assertEqual(None, after_status_record.message)
     self.assertEqual('/another_console', after_status_record.console_url)
@@ -851,11 +851,11 @@ class PipelineTest(TestBase):
     try:
       stage.set_status(message=object())
     except pipeline.PipelineRuntimeError as e:
-      self.assertEqual(
-          f'Could not set status for {OutputlessPipeline.__module__}.OutputlessPipeline(*(), **{{}})'
-          '#banana: Property message must be convertible to a Text instance '
-          '(Text() argument should be str or unicode, not object)',
-          str(e))
+      self.assertIn('Expected string, got <object object', str(e))
+      self.assertIn(
+        f'Could not set status for {OutputlessPipeline.__module__}.OutputlessPipeline(*(), **{{}})',
+        str(e)
+      )
 
   def testTestMode(self):
     """Tests the test_mode property of Pipelines."""
@@ -889,8 +889,7 @@ class PipelineTest(TestBase):
         cleanup_task['params']['root_pipeline_key'])
 
     # If the stage is actually a child stage, then cleanup does nothing.
-    stage._root_pipeline_key = db.Key.from_path(
-        _PipelineRecord.kind(), 'other')
+    stage._root_pipeline_key = ndb.Key(_PipelineRecord, 'other')
     self.assertFalse(stage.is_root)
     stage.cleanup()
     task_list = test_shared.get_tasks('default')
@@ -1045,8 +1044,8 @@ class UtilitiesTest(TestBase):
 
   def testDereferenceArgsNotFilled(self):
     """Tests when an argument was not filled."""
-    slot_key = db.Key.from_path(_SlotRecord.kind(), 'myslot')
-    args = [{'type': 'slot', 'slot_key': str(slot_key)}]
+    slot_key = ndb.Key(_SlotRecord, 'myslot')
+    args = [{'type': 'slot', 'slot_key': slot_key.urlsafe().decode()}]
     self.assertRaises(pipeline.SlotNotFilledError,
         pipeline._dereference_args, 'foo', args, {})
 
@@ -1065,14 +1064,14 @@ class UtilitiesTest(TestBase):
     future = pipeline.PipelineFuture(['one', 'two', 'unused'])
     other_future = pipeline.PipelineFuture(['three', 'four'])
 
-    future.one.key = db.Key.from_path('First', 'one')
-    future.two.key = db.Key.from_path('First', 'two')
-    future.default.key = db.Key.from_path('First', 'three')
-    future.unused.key = db.Key.from_path('First', 'unused')
+    future.one.key = ndb.Key(_SlotRecord, 'one')
+    future.two.key = ndb.Key(_SlotRecord, 'two')
+    future.default.key = ndb.Key(_SlotRecord, 'three')
+    future.unused.key = ndb.Key(_SlotRecord, 'unused')
 
-    other_future.three.key = db.Key.from_path('Second', 'three')
-    other_future.four.key = db.Key.from_path('Second', 'four')
-    other_future.default.key = db.Key.from_path('Second', 'four')
+    other_future.three.key = ndb.Key(_SlotRecord, 'three')
+    other_future.four.key = ndb.Key(_SlotRecord, 'four')
+    other_future.default.key = ndb.Key(_SlotRecord, 'four')
 
     other_future._after_all_pipelines.add(future)
 
@@ -1099,25 +1098,25 @@ class UtilitiesTest(TestBase):
     self.assertEqual(
         {
             'queue_name': 'my-queue',
-            'after_all': [str(future.default.key)],
+            'after_all': [future.default.key.urlsafe().decode()],
             'class_path': '{}.GenerateArgs'.format(__name__),
             'args': [
-                {'slot_key': str(future.one.key),
+                {'slot_key': future.one.key.urlsafe().decode(),
                  'type': 'slot'},
                 {'type': 'value', 'value': 'some value'},
-                {'slot_key': str(future.default.key),
+                {'slot_key': future.default.key.urlsafe().decode(),
                  'type': 'slot'}
             ],
             'base_path': '/base-path',
             'kwargs': {
-                'blue': {'slot_key': str(future.two.key),
+                'blue': {'slot_key': future.two.key.urlsafe().decode(),
                          'type': 'slot'},
                 'red': {'type': 'value', 'value': 1234}
             },
             'output_slots': {
-                'default': str(other_future.default.key),
-                'four': str(other_future.four.key),
-                'three': str(other_future.three.key)
+                'default': other_future.default.key.urlsafe().decode(),
+                'four': other_future.four.key.urlsafe().decode(),
+                'three': other_future.three.key.urlsafe().decode()
             },
             'max_attempts': 3,
             'backoff_factor': 2,
@@ -1172,16 +1171,16 @@ class PipelineContextTest(TestBase):
   def setUp(self):
     """Sets up the test harness."""
     TestBase.setUp(self)
-    self.pipeline1_key = db.Key.from_path(_PipelineRecord.kind(), '1')
-    self.pipeline2_key = db.Key.from_path(_PipelineRecord.kind(), '2')
-    self.pipeline3_key = db.Key.from_path(_PipelineRecord.kind(), '3')
-    self.pipeline4_key = db.Key.from_path(_PipelineRecord.kind(), '4')
-    self.pipeline5_key = db.Key.from_path(_PipelineRecord.kind(), '5')
+    self.pipeline1_key = ndb.Key(_PipelineRecord, '1')
+    self.pipeline2_key = ndb.Key(_PipelineRecord, '2')
+    self.pipeline3_key = ndb.Key(_PipelineRecord, '3')
+    self.pipeline4_key = ndb.Key(_PipelineRecord, '4')
+    self.pipeline5_key = ndb.Key(_PipelineRecord, '5')
 
-    self.slot1_key = db.Key.from_path(_SlotRecord.kind(), 'one')
-    self.slot2_key = db.Key.from_path(_SlotRecord.kind(), 'missing')
-    self.slot3_key = db.Key.from_path(_SlotRecord.kind(), 'three')
-    self.slot4_key = db.Key.from_path(_SlotRecord.kind(), 'four')
+    self.slot1_key = ndb.Key(_SlotRecord, 'one')
+    self.slot2_key = ndb.Key(_SlotRecord, 'missing')
+    self.slot3_key = ndb.Key(_SlotRecord, 'three')
+    self.slot4_key = ndb.Key(_SlotRecord, 'four')
 
     self.slot1 = _SlotRecord(
         key=self.slot1_key,
@@ -1217,7 +1216,7 @@ class PipelineContextTest(TestBase):
 
     self.barrier4 = _BarrierRecord(
         parent=self.pipeline4_key,
-        key_name=_BarrierRecord.START,
+        id=_BarrierRecord.START,
         root_pipeline=self.pipeline4_key,
         target=self.pipeline4_key,
         blocking_slots=[self.slot1_key, self.slot2_key],
@@ -1250,7 +1249,7 @@ class PipelineContextTest(TestBase):
     self.assertEqual(_BarrierRecord.FIRED, self.barrier4.status)
     self.assertEqual(_BarrierRecord.WAITING, self.barrier5.status)
 
-    db.put([self.barrier1, self.barrier2, self.barrier3, self.barrier4,
+    ndb.put_multi([self.barrier1, self.barrier2, self.barrier3, self.barrier4,
             self.barrier5, self.slot1, self.slot3, self.slot4,
             self.barrier1_index1, self.barrier2_index1, self.barrier2_index3,
             self.barrier3_index1, self.barrier3_index4, self.barrier4_index1,
@@ -1267,26 +1266,26 @@ class PipelineContextTest(TestBase):
     first_task, second_task, continuation_task = task_list
 
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline1_key)],
+        {'pipeline_key': [self.pipeline1_key.urlsafe().decode()],
          'purpose': [_BarrierRecord.FINALIZE]},
         first_task['params'])
     self.assertEqual('/base-path/finalized', first_task['url'])
 
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline3_key)],
+        {'pipeline_key': [self.pipeline3_key.urlsafe().decode()],
          'purpose': [_BarrierRecord.START]},
         second_task['params'])
     self.assertEqual('/base-path/run', second_task['url'])
 
     self.assertEqual('/base-path/output', continuation_task['url'])
     self.assertEqual(
-        [str(self.slot1_key)], continuation_task['params']['slot_key'])
+        [self.slot1_key.urlsafe().decode()], continuation_task['params']['slot_key'])
     self.assertEqual(
         'my-task1-ae-barrier-notify-0',
         continuation_task['name'])
 
-    barrier1, barrier2, barrier3 = db.get(
-        [self.barrier1.key(), self.barrier2.key(), self.barrier3.key()])
+    barrier1, barrier2, barrier3 = ndb.get_multi(
+        [self.barrier1.key, self.barrier2.key, self.barrier3.key])
 
     self.assertEqual(_BarrierRecord.FIRED, barrier1.status)
     self.assertTrue(barrier1.trigger_time is not None)
@@ -1323,7 +1322,7 @@ class PipelineContextTest(TestBase):
     slot2 = _SlotRecord(
         key=self.slot2_key,
         status=_SlotRecord.WAITING)
-    db.put(slot2)
+    slot2.put()
     self.context.notify_barriers(
         self.slot1_key,
         continuation_task['params']['cursor'][0],
@@ -1336,19 +1335,19 @@ class PipelineContextTest(TestBase):
     third_task, continuation2_task = task_list
 
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline5_key)],
+        {'pipeline_key': [self.pipeline5_key.urlsafe().decode()],
          'purpose': [_BarrierRecord.START]},
         third_task['params'])
     self.assertEqual('/base-path/run', third_task['url'])
 
     self.assertEqual('/base-path/output', continuation2_task['url'])
     self.assertEqual(
-        [str(self.slot1_key)], continuation2_task['params']['slot_key'])
+        [self.slot1_key.urlsafe().decode()], continuation2_task['params']['slot_key'])
     self.assertEqual(
         'my-task1-ae-barrier-notify-1',
         continuation2_task['name'])
 
-    barrier4, barrier5 = db.get([self.barrier4.key(), self.barrier5.key()])
+    barrier4, barrier5 = ndb.get_multi([self.barrier4.key, self.barrier5.key])
     self.assertEqual(_BarrierRecord.FIRED, barrier4.status)
     # Shows that the _BarrierRecord entity was not overwritten.
     self.assertTrue(barrier4.trigger_time is None)
@@ -1378,12 +1377,12 @@ class PipelineContextTest(TestBase):
   def testNotifyBarrierFire_WithBarrierIndexes_BarrierMissing(self):
       """Tests _BarrierIndex firing when a _BarrierRecord is missing."""
       self.assertEqual(_BarrierRecord.WAITING, self.barrier1.status)
-      db.put([self.slot1, self.barrier1_index1])
+      ndb.put_multi([self.slot1, self.barrier1_index1])
 
       # The _BarrierRecord corresponding to barrier1_index1 is never put, which
       # will cause notify_barriers to fail with a missing barrier error.
-      self.assertNotEqual(None, db.get(self.barrier1_index1.key()))
-      self.assertEqual(None, db.get(self.barrier1.key()))
+      self.assertNotEqual(None, self.barrier1_index1.key.get())
+      self.assertEqual(None, self.barrier1.key.get())
 
       # This doesn't raise an exception.
       self.context.notify_barriers(
@@ -1401,7 +1400,7 @@ class PipelineContextTest(TestBase):
     self.assertEqual(_BarrierRecord.FIRED, self.barrier4.status)
     self.assertEqual(_BarrierRecord.WAITING, self.barrier5.status)
 
-    db.put([self.barrier1, self.barrier2, self.barrier3, self.barrier4,
+    ndb.put_multi([self.barrier1, self.barrier2, self.barrier3, self.barrier4,
             self.barrier5, self.slot1, self.slot3, self.slot4])
     self.context.notify_barriers(
         self.slot1_key,
@@ -1415,26 +1414,26 @@ class PipelineContextTest(TestBase):
     first_task, second_task, continuation_task = task_list
 
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline1_key)],
+        {'pipeline_key': [self.pipeline1_key.urlsafe().decode()],
          'purpose': [_BarrierRecord.FINALIZE]},
         first_task['params'])
     self.assertEqual('/base-path/finalized', first_task['url'])
 
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline3_key)],
+        {'pipeline_key': [self.pipeline3_key.urlsafe().decode()],
          'purpose': [_BarrierRecord.START]},
         second_task['params'])
     self.assertEqual('/base-path/run', second_task['url'])
 
     self.assertEqual('/base-path/output', continuation_task['url'])
     self.assertEqual(
-        [str(self.slot1_key)], continuation_task['params']['slot_key'])
+        [self.slot1_key.urlsafe().decode()], continuation_task['params']['slot_key'])
     self.assertEqual(
         'my-task1-ae-barrier-notify-0',
         continuation_task['name'])
 
-    barrier1, barrier2, barrier3 = db.get(
-        [self.barrier1.key(), self.barrier2.key(), self.barrier3.key()])
+    barrier1, barrier2, barrier3 = ndb.get_multi(
+        [self.barrier1.key, self.barrier2.key, self.barrier3.key])
 
     self.assertEqual(_BarrierRecord.FIRED, barrier1.status)
     self.assertTrue(barrier1.trigger_time is not None)
@@ -1471,7 +1470,7 @@ class PipelineContextTest(TestBase):
     slot2 = _SlotRecord(
         key=self.slot2_key,
         status=_SlotRecord.WAITING)
-    db.put(slot2)
+    slot2.put()
     self.context.notify_barriers(
         self.slot1_key,
         continuation_task['params']['cursor'][0],
@@ -1484,19 +1483,19 @@ class PipelineContextTest(TestBase):
     third_task, continuation2_task = task_list
 
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline5_key)],
+        {'pipeline_key': [self.pipeline5_key.urlsafe().decode()],
          'purpose': [_BarrierRecord.START]},
         third_task['params'])
     self.assertEqual('/base-path/run', third_task['url'])
 
     self.assertEqual('/base-path/output', continuation2_task['url'])
     self.assertEqual(
-        [str(self.slot1_key)], continuation2_task['params']['slot_key'])
+        [self.slot1_key.urlsafe().decode()], continuation2_task['params']['slot_key'])
     self.assertEqual(
         'my-task1-ae-barrier-notify-1',
         continuation2_task['name'])
 
-    barrier4, barrier5 = db.get([self.barrier4.key(), self.barrier5.key()])
+    barrier4, barrier5 = ndb.get_multi([self.barrier4.key, self.barrier5.key])
     self.assertEqual(_BarrierRecord.FIRED, barrier4.status)
     # Shows that the _BarrierRecord entity was not overwritten.
     self.assertTrue(barrier4.trigger_time is None)
@@ -1525,7 +1524,7 @@ class PipelineContextTest(TestBase):
 
   def testTransitionRunMissing(self):
     """Tests transition_run when the _PipelineRecord is missing."""
-    self.assertTrue(db.get(self.pipeline1_key) is None)
+    self.assertTrue(self.pipeline1_key.get() is None)
     self.context.transition_run(self.pipeline1_key)
     # That's it. No exception raised.
 
@@ -1535,7 +1534,7 @@ class PipelineContextTest(TestBase):
         status=_PipelineRecord.DONE,
         key=self.pipeline1_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
     self.context.transition_run(self.pipeline1_key)
     # That's it. No exception raised.
 
@@ -1545,7 +1544,7 @@ class PipelineContextTest(TestBase):
         status=_PipelineRecord.WAITING,
         key=self.pipeline1_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
     self.assertRaises(pipeline.UnexpectedPipelineError,
         self.context.transition_run,
         self.pipeline1_key,
@@ -1553,7 +1552,7 @@ class PipelineContextTest(TestBase):
 
   def testTransitionCompleteMissing(self):
     """Tests transition_complete when the _PipelineRecord is missing."""
-    self.assertTrue(db.get(self.pipeline1_key) is None)
+    self.assertTrue(self.pipeline1_key.get() is None)
     self.context.transition_complete(self.pipeline1_key)
     # That's it. No exception raised.
 
@@ -1563,13 +1562,13 @@ class PipelineContextTest(TestBase):
         status=_PipelineRecord.DONE,
         key=self.pipeline1_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
     self.context.transition_complete(self.pipeline1_key)
     # That's it. No exception raised.
 
   def testTransitionRetryMissing(self):
     """Tests transition_retry when the _PipelineRecord is missing."""
-    self.assertTrue(db.get(self.pipeline1_key) is None)
+    self.assertTrue(self.pipeline1_key.get() is None)
     self.assertFalse(
         self.context.transition_retry(self.pipeline1_key, 'my message'))
     # No exception raised.
@@ -1581,7 +1580,7 @@ class PipelineContextTest(TestBase):
         status=_PipelineRecord.DONE,
         key=self.pipeline1_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
     self.assertFalse(
         self.context.transition_retry(self.pipeline1_key, 'my message'))
     # No exception raised.
@@ -1600,12 +1599,10 @@ class PipelineContextTest(TestBase):
         key=self.pipeline1_key,
         max_attempts=5,
         current_attempt=4,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params),
+        params_text=json.dumps(params),
         root_pipeline=self.pipeline5_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
     self.assertFalse(
         self.context.transition_retry(self.pipeline1_key, 'my message'))
 
@@ -1616,7 +1613,7 @@ class PipelineContextTest(TestBase):
 
     self.assertEqual('/base-path/fanout_abort', task_list[0]['url'])
     self.assertEqual(
-        {'root_pipeline_key': [str(self.pipeline5_key)]},
+        {'root_pipeline_key': [self.pipeline5_key.urlsafe().decode()]},
         task_list[0]['params'])
 
   def testTransitionRetryTaskParams(self):
@@ -1635,12 +1632,10 @@ class PipelineContextTest(TestBase):
         key=self.pipeline1_key,
         max_attempts=5,
         current_attempt=0,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params),
+        params_text=json.dumps(params),
         root_pipeline=self.pipeline5_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
 
     start_time = datetime.datetime.now()
     when_list = [
@@ -1664,7 +1659,7 @@ class PipelineContextTest(TestBase):
       self.assertEqual('/base-path/run', task['url'])
       self.assertEqual(
           {
-              'pipeline_key': [str(self.pipeline1_key)],
+              'pipeline_key': [self.pipeline1_key.urlsafe().decode()],
               'attempt': [str(attempt + 1)],
               'purpose': ['start']
           }, task['params'])
@@ -1672,7 +1667,7 @@ class PipelineContextTest(TestBase):
       next_eta = when_list[attempt] + datetime.timedelta(seconds=delay_seconds)
       self.assertEqual(next_eta, test_shared.utc_to_local(task['eta']))
 
-      pipeline_record = db.get(self.pipeline1_key)
+      pipeline_record = self.pipeline1_key.get()
       self.assertEqual(attempt + 1, pipeline_record.current_attempt)
       self.assertEqual(next_eta, pipeline_record.next_retry_time)
       self.assertEqual('my message %d' % attempt,
@@ -1688,12 +1683,12 @@ class PipelineContextTest(TestBase):
 
     self.assertEqual('/base-path/fanout_abort', task_list[0]['url'])
     self.assertEqual(
-        {'root_pipeline_key': [str(self.pipeline5_key)]},
+        {'root_pipeline_key': [self.pipeline5_key.urlsafe().decode()]},
         task_list[0]['params'])
 
   def testBeginAbortMissing(self):
     """Tests begin_abort when the pipeline is missing."""
-    self.assertTrue(db.get(self.pipeline1_key) is None)
+    self.assertTrue(self.pipeline1_key.get() is None)
     self.assertFalse(
         self.context.begin_abort(self.pipeline1_key, 'error message'))
 
@@ -1709,11 +1704,9 @@ class PipelineContextTest(TestBase):
         status=_PipelineRecord.ABORTED,
         abort_requested=False,
         key=self.pipeline1_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params))
+        params_text=json.dumps(params))
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
 
     self.assertFalse(
         self.context.begin_abort(self.pipeline1_key, 'error message'))
@@ -1730,11 +1723,9 @@ class PipelineContextTest(TestBase):
         status=_PipelineRecord.WAITING,
         abort_requested=True,
         key=self.pipeline1_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params))
+        params_text=json.dumps(params))
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
 
     self.assertFalse(
         self.context.begin_abort(self.pipeline1_key, 'error message'))
@@ -1750,11 +1741,9 @@ class PipelineContextTest(TestBase):
     pipeline_record = _PipelineRecord(
         status=_PipelineRecord.RUN,
         key=self.pipeline1_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params))
+        params_text=json.dumps(params))
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
 
     self.assertTrue(
         self.context.begin_abort(self.pipeline1_key, 'error message'))
@@ -1766,7 +1755,7 @@ class PipelineContextTest(TestBase):
 
     self.assertEqual('/base-path/fanout_abort', task_list[0]['url'])
     self.assertEqual(
-        {'root_pipeline_key': [str(self.pipeline1_key)]},
+        {'root_pipeline_key': [self.pipeline1_key.urlsafe().decode()]},
         task_list[0]['params'])
 
   def testContinueAbort(self):
@@ -1780,40 +1769,30 @@ class PipelineContextTest(TestBase):
     pipeline_record1 = _PipelineRecord(
         status=_PipelineRecord.RUN,
         key=self.pipeline1_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params),
+        params_text=json.dumps(params),
         root_pipeline=self.pipeline1_key)
     pipeline_record2 = _PipelineRecord(
         status=_PipelineRecord.RUN,
         key=self.pipeline2_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params),
+        params_text=json.dumps(params),
         root_pipeline=self.pipeline1_key)
     pipeline_record3 = _PipelineRecord(
         status=_PipelineRecord.RUN,
         key=self.pipeline3_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params),
+        params_text=json.dumps(params),
         root_pipeline=self.pipeline1_key)
     pipeline_record4 = _PipelineRecord(
         status=_PipelineRecord.ABORTED,
         key=self.pipeline4_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params),
+        params_text=json.dumps(params),
         root_pipeline=self.pipeline1_key)
     pipeline_record5 = _PipelineRecord(
         status=_PipelineRecord.DONE,
         key=self.pipeline5_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params),
+        params_text=json.dumps(params),
         root_pipeline=self.pipeline1_key)
 
-    db.put([pipeline_record1, pipeline_record2, pipeline_record3,
+    ndb.put_multi([pipeline_record1, pipeline_record2, pipeline_record3,
             pipeline_record4, pipeline_record5])
 
     self.context.continue_abort(self.pipeline1_key, max_to_notify=2)
@@ -1828,14 +1807,14 @@ class PipelineContextTest(TestBase):
     # Abort for the first pipeline
     self.assertEqual('/base-path/abort', first_task['url'])
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline1_key)],
+        {'pipeline_key': [self.pipeline1_key.urlsafe().decode()],
          'purpose': ['abort']},
         first_task['params'])
 
     # Abort for the second pipeline
     self.assertEqual('/base-path/abort', second_task['url'])
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline2_key)],
+        {'pipeline_key': [self.pipeline2_key.urlsafe().decode()],
          'purpose': ['abort']},
         second_task['params'])
 
@@ -1843,7 +1822,7 @@ class PipelineContextTest(TestBase):
     self.assertEqual('/base-path/fanout_abort', continuation_task['url'])
     self.assertEqual(set(['cursor', 'root_pipeline_key']),
                       set(continuation_task['params'].keys()))
-    self.assertEqual(str(self.pipeline1_key),
+    self.assertEqual(self.pipeline1_key.urlsafe().decode(),
                       continuation_task['params']['root_pipeline_key'][0])
     self.assertTrue(continuation_task['name'].endswith('-0'))
     cursor = continuation_task['params']['cursor'][0]
@@ -1863,7 +1842,7 @@ class PipelineContextTest(TestBase):
     # Abort for the third pipeline
     self.assertEqual('/base-path/abort', fifth_task['url'])
     self.assertEqual(
-        {'pipeline_key': [str(self.pipeline3_key)],
+        {'pipeline_key': [self.pipeline3_key.urlsafe().decode()],
          'purpose': ['abort']},
         fifth_task['params'])
 
@@ -1873,7 +1852,7 @@ class PipelineContextTest(TestBase):
     self.assertEqual(set(['cursor', 'root_pipeline_key']),
                       set(second_continuation_task['params'].keys()))
     self.assertEqual(
-        str(self.pipeline1_key),
+        self.pipeline1_key.urlsafe().decode(),
         second_continuation_task['params']['root_pipeline_key'][0])
     self.assertTrue(second_continuation_task['name'].endswith('-1'))
     cursor2 = second_continuation_task['params']['cursor'][0]
@@ -1895,7 +1874,7 @@ class PipelineContextTest(TestBase):
     self.assertEqual(set(['cursor', 'root_pipeline_key']),
                       set(third_continuation_task['params'].keys()))
     self.assertEqual(
-        str(self.pipeline1_key),
+        self.pipeline1_key.urlsafe().decode(),
         third_continuation_task['params']['root_pipeline_key'][0])
     self.assertTrue(third_continuation_task['name'].endswith('-2'))
     cursor3 = third_continuation_task['params']['cursor'][0]
@@ -1912,7 +1891,7 @@ class PipelineContextTest(TestBase):
 
   def testTransitionAbortedMissing(self):
     """Tests transition_aborted when the pipeline is missing."""
-    self.assertTrue(db.get(self.pipeline1_key) is None)
+    self.assertTrue(self.pipeline1_key.get() is None)
     self.context.transition_aborted(self.pipeline1_key)
     # That's it. No exception raised.
 
@@ -1928,17 +1907,15 @@ class PipelineContextTest(TestBase):
     pipeline_record = _PipelineRecord(
         status=_PipelineRecord.ABORTED,
         key=self.pipeline1_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params),
+        params_text=json.dumps(params),
         finalized_time=finalized_time)
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
 
     self.context.transition_aborted(self.pipeline1_key)
 
     # Finalized time will stay the same.
-    after_record = db.get(self.pipeline1_key)
+    after_record = self.pipeline1_key.get()
     self.assertEqual(pipeline_record.finalized_time,
                       after_record.finalized_time)
 
@@ -1953,15 +1930,13 @@ class PipelineContextTest(TestBase):
     pipeline_record = _PipelineRecord(
         status=_PipelineRecord.WAITING,
         key=self.pipeline1_key,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(params))
+        params_text=json.dumps(params))
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline1_key) is not None)
+    self.assertTrue(self.pipeline1_key.get() is not None)
 
     self.context.transition_aborted(self.pipeline1_key)
 
-    after_record = db.get(self.pipeline1_key)
+    after_record = self.pipeline1_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
     self.assertTrue(pipeline_record.finalized_time is None)
     self.assertTrue(isinstance(after_record.finalized_time, datetime.datetime))
@@ -1973,14 +1948,14 @@ class EvaluateErrorTest(test_shared.TaskRunningMixin, TestBase):
   def setUp(self):
     """Sets up the test harness."""
     super(EvaluateErrorTest, self).setUp()
-    self.pipeline_key = db.Key.from_path(_PipelineRecord.kind(), '1')
-    self.slot_key = db.Key.from_path(_SlotRecord.kind(), 'red')
+    self.pipeline_key = ndb.Key(_PipelineRecord, '1')
+    self.slot_key = ndb.Key(_SlotRecord, 'red')
     self.context = pipeline._PipelineContext(
         'my-task1', 'default', '/base-path')
-
+    
   def testPipelineMissing(self):
     """Tests running a pipeline key that's disappeared."""
-    self.assertTrue(db.get(self.pipeline_key) is None)
+    self.assertTrue(self.pipeline_key.get() is None)
     self.context.evaluate(self.pipeline_key)
     # That's it. No exception raised.
 
@@ -1990,7 +1965,7 @@ class EvaluateErrorTest(test_shared.TaskRunningMixin, TestBase):
         status=_PipelineRecord.DONE,
         key=self.pipeline_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.pipeline_key) is not None)
+    self.assertTrue(self.pipeline_key.get() is not None)
     self.context.evaluate(self.pipeline_key)
 
   def testDefaultSlotMissing(self):
@@ -1998,34 +1973,30 @@ class EvaluateErrorTest(test_shared.TaskRunningMixin, TestBase):
     pipeline_record = _PipelineRecord(
         root_pipeline=self.pipeline_key,
         status=_PipelineRecord.WAITING,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps({
-            'output_slots': {'default': str(self.slot_key)}}),
+        params_text=json.dumps({
+            'output_slots': {'default': self.slot_key.urlsafe().decode()}}),
         key=self.pipeline_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.slot_key) is None)
-    self.assertTrue(db.get(self.pipeline_key) is not None)
+    self.assertTrue(self.slot_key.get() is None)
+    self.assertTrue(self.pipeline_key.get() is not None)
     self.context.evaluate(self.pipeline_key)
     # That's it. No exception raised.
 
   def testRootPipelineMissing(self):
     """Tests when the root pipeline record is missing."""
-    missing_key = db.Key.from_path(_PipelineRecord.kind(), 'unknown')
+    missing_key = ndb.Key(_PipelineRecord, 'unknown')
     slot_record = _SlotRecord(key=self.slot_key)
     slot_record.put()
     pipeline_record = _PipelineRecord(
         root_pipeline=missing_key,
         status=_PipelineRecord.WAITING,
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps({
-            'output_slots': {'default': str(self.slot_key)}}),
+        params_text=json.dumps({
+            'output_slots': {'default': self.slot_key.urlsafe().decode()}}),
         key=self.pipeline_key)
     pipeline_record.put()
-    self.assertTrue(db.get(missing_key) is None)
-    self.assertTrue(db.get(self.slot_key) is not None)
-    self.assertTrue(db.get(self.pipeline_key) is not None)
+    self.assertTrue(missing_key.get() is None)
+    self.assertTrue(self.slot_key.get() is not None)
+    self.assertTrue(self.pipeline_key.get() is not None)
     self.context.evaluate(self.pipeline_key)
     # That's it. No exception raised.
 
@@ -2037,14 +2008,12 @@ class EvaluateErrorTest(test_shared.TaskRunningMixin, TestBase):
         root_pipeline=self.pipeline_key,
         status=_PipelineRecord.WAITING,
         class_path='does.not.exist',
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps({
-            'output_slots': {'default': str(self.slot_key)}}),
+        params_text=json.dumps({
+            'output_slots': {'default': self.slot_key.urlsafe().decode()}}),
         key=self.pipeline_key)
     pipeline_record.put()
-    self.assertTrue(db.get(self.slot_key) is not None)
-    self.assertTrue(db.get(self.pipeline_key) is not None)
+    self.assertTrue(self.slot_key.get() is not None)
+    self.assertTrue(self.pipeline_key.get() is not None)
     self.assertRaises(ImportError, self.context.evaluate, self.pipeline_key)
 
 
@@ -2184,19 +2153,17 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def setUp(self):
     """Sets up the test harness."""
     super(TaskRunningTest, self).setUp()
-    self.pipeline_key = db.Key.from_path(_PipelineRecord.kind(), 'one')
-    self.pipeline2_key = db.Key.from_path(_PipelineRecord.kind(), 'two')
-    self.slot_key = db.Key.from_path(_SlotRecord.kind(), 'red')
+    self.pipeline_key = ndb.Key(_PipelineRecord, 'one')
+    self.pipeline2_key = ndb.Key(_PipelineRecord, 'two')
+    self.slot_key = ndb.Key(_SlotRecord, 'red')
 
     self.slot_record = _SlotRecord(key=self.slot_key)
     self.pipeline_record = _PipelineRecord(
         root_pipeline=self.pipeline_key,
         status=_PipelineRecord.WAITING,
         class_path='does.not.exist',
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps({
-                 'output_slots': {'default': str(self.slot_key)},
+        params_text=json.dumps({
+                 'output_slots': {'default': self.slot_key.urlsafe().decode()},
                  'args': [],
                  'kwargs': {},
                  'task_retry': False,
@@ -2210,7 +2177,7 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
         max_attempts=4)
     self.barrier_record = _BarrierRecord(
             parent=self.pipeline_key,
-            key_name=_BarrierRecord.FINALIZE,
+            id=_BarrierRecord.FINALIZE,
             target=self.pipeline_key,
             root_pipeline=self.pipeline_key,
             blocking_slots=[self.slot_key])
@@ -2221,14 +2188,14 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testSubstagesRunImmediately(self):
     """Tests that sub-stages with no blocking slots are run immediately."""
     self.pipeline_record.class_path = '{}.DumbGeneratorYields'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record, self.barrier_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record, self.barrier_record])
 
-    before_record = db.get(self.pipeline_key)
+    before_record = self.pipeline_key.get()
     self.assertEqual([], before_record.fanned_out)
 
     self.context.evaluate(self.pipeline_key)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(2, len(after_record.fanned_out))
     child1_key, child2_key = after_record.fanned_out
 
@@ -2237,13 +2204,13 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     fanout_task = task_list[0]
 
     # Verify that the start time is set for non-blocked child pipelines.
-    child_record_list = db.get(after_record.fanned_out)
+    child_record_list = ndb.get_multi(after_record.fanned_out)
     for child_record in child_record_list:
       self.assertTrue(child_record.start_time is not None)
 
     # One fan-out task with both children.
     self.assertEqual(
-        [str(self.pipeline_key)],
+        [self.pipeline_key.urlsafe().decode()],
         fanout_task['params']['parent_key'])
     self.assertEqual(
         ['0', '1'],
@@ -2251,37 +2218,29 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.assertEqual('/base-path/fanout', fanout_task['url'])
 
     # Only finalization barriers present.
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.START,
-                         parent=child1_key)) is None)
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.START,
-                         parent=child2_key)) is None)
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.FINALIZE,
-                         parent=child1_key)) is not None)
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.FINALIZE,
-                         parent=child2_key)) is not None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.START, parent=child1_key).get() is None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.START, parent=child2_key).get() is None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.FINALIZE, parent=child1_key).get() is not None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.FINALIZE, parent=child2_key).get() is not None)
 
   def testSubstagesBlock(self):
     """Tests that sub-stages with pending inputs will have a barrier added."""
     self.pipeline_record.class_path = '{}.DumbGeneratorYields'.format(__name__)
     params = self.pipeline_record.params.copy()
     params.update({
-        'output_slots': {'default': str(self.slot_key)},
+        'output_slots': {'default': self.slot_key.urlsafe().decode()},
         'args': [{'type': 'value', 'value': True}],
         'kwargs': {},
     })
     self.pipeline_record.params_text = json.dumps(params)
-    db.put([self.pipeline_record, self.slot_record, self.barrier_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record, self.barrier_record])
 
-    before_record = db.get(self.pipeline_key)
+    before_record = self.pipeline_key.get()
     self.assertEqual([], before_record.fanned_out)
 
     self.context.evaluate(self.pipeline_key)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(3, len(after_record.fanned_out))
 
     task_list = test_shared.get_tasks()
@@ -2291,7 +2250,7 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     # Only two children should start.
     self.assertEqual('/base-path/fanout', fanout_task['url'])
     self.assertEqual(
-        [str(self.pipeline_key)],
+        [self.pipeline_key.urlsafe().decode()],
         fanout_task['params']['parent_key'])
     self.assertEqual(
         ['0', '1'],
@@ -2304,46 +2263,34 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     other_child_key = list(set(after_record.fanned_out) - run_children)[0]
 
     # Only a start barrier inserted for the one pending child.
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.START,
-                         parent=child1_key)) is None)
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.START,
-                         parent=child2_key)) is None)
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.START,
-                         parent=other_child_key)) is not None)
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.FINALIZE,
-                         parent=child1_key)) is not None)
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.FINALIZE,
-                         parent=child2_key)) is not None)
-    self.assertTrue(db.get(
-        db.Key.from_path(_BarrierRecord.kind(), _BarrierRecord.FINALIZE,
-                         parent=other_child_key)) is not None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.START, parent=child1_key).get() is None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.START, parent=child2_key).get() is None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.START, parent=other_child_key).get() is not None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.FINALIZE, parent=child1_key).get() is not None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.FINALIZE, parent=child2_key).get() is not None)
+    self.assertTrue(ndb.Key(_BarrierRecord, _BarrierRecord.FINALIZE, parent=other_child_key).get() is not None)
 
   def testFannedOutOrdering(self):
     """Tests that the fanned_out property lists children in code order."""
     self.pipeline_record.class_path = '{}.DumbGeneratorYields'.format(__name__)
     params = self.pipeline_record.params.copy()
     params.update({
-        'output_slots': {'default': str(self.slot_key)},
+        'output_slots': {'default': self.slot_key.urlsafe().decode()},
         'args': [{'type': 'value', 'value': True}],
         'kwargs': {},
     })
     self.pipeline_record.params_text = json.dumps(params)
-    db.put([self.pipeline_record, self.slot_record, self.barrier_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record, self.barrier_record])
 
-    before_record = db.get(self.pipeline_key)
+    before_record = self.pipeline_key.get()
     self.assertEqual([], before_record.fanned_out)
 
     self.context.evaluate(self.pipeline_key)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(3, len(after_record.fanned_out))
 
-    children = db.get(after_record.fanned_out)
+    children = ndb.get_multi(after_record.fanned_out)
     self.assertEqual(1, children[0].params['args'][0]['value'])
     self.assertEqual(2, children[1].params['args'][0]['value'])
     self.assertEqual(3, children[2].params['args'][0]['value'])
@@ -2351,22 +2298,22 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testSyncWaitingStartRerun(self):
     """Tests a waiting, sync pipeline being re-run after it already output."""
     self.pipeline_record.class_path = '{}.DumbSync'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
-    before_record = db.get(self.slot_key)
+    before_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.WAITING, before_record.status)
     self.assertTrue(before_record.fill_time is None)
     self.context.evaluate(self.pipeline_key)
 
-    after_record = db.get(self.slot_key)
+    after_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.FILLED, after_record.status)
     self.assertTrue(after_record.fill_time is not None)
 
-    after_pipeline = db.get(self.pipeline_key)
+    after_pipeline = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_pipeline.status)
 
     self.context.evaluate(self.pipeline_key)
-    second_after_record = db.get(self.slot_key)
+    second_after_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.FILLED, second_after_record.status)
     self.assertTrue(second_after_record.fill_time is not None)
 
@@ -2378,14 +2325,14 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.class_path = '{}.DumbSync'.format(__name__)
     self.slot_record.status = _SlotRecord.FILLED
     self.slot_record.value_text = json.dumps(None)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    second_after_record = db.get(self.pipeline_key)
+    second_after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
     # Finalized time will stay the same.
@@ -2400,10 +2347,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.finalized_time = now
     self.slot_record.status = _SlotRecord.FILLED
     self.slot_record.value_text = json.dumps(None)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
     # Finalize time stays the same.
@@ -2412,22 +2359,22 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testAsyncWaitingRerun(self):
     """Tests a waiting, async pipeline task being re-run."""
     self.pipeline_record.class_path = '{}.DumbAsync'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
-    before_record = db.get(self.slot_key)
+    before_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.WAITING, before_record.status)
     self.assertTrue(before_record.fill_time is None)
     self.context.evaluate(self.pipeline_key)
 
-    after_record = db.get(self.slot_key)
+    after_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.FILLED, after_record.status)
     self.assertTrue(after_record.fill_time is not None)
 
-    after_pipeline = db.get(self.pipeline_key)
+    after_pipeline = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.RUN, after_pipeline.status)
 
     self.context.evaluate(self.pipeline_key)
-    second_after_record = db.get(self.slot_key)
+    second_after_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.FILLED, second_after_record.status)
     self.assertTrue(second_after_record.fill_time is not None)
 
@@ -2438,22 +2385,22 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """Tests a run, async pipeline task being re-run."""
     self.pipeline_record.class_path = '{}.DumbAsync'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.RUN
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
-    before_record = db.get(self.slot_key)
+    before_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.WAITING, before_record.status)
     self.assertTrue(before_record.fill_time is None)
     self.context.evaluate(self.pipeline_key)
 
-    after_record = db.get(self.slot_key)
+    after_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.FILLED, after_record.status)
     self.assertTrue(after_record.fill_time is not None)
 
-    after_pipeline = db.get(self.pipeline_key)
+    after_pipeline = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.RUN, after_pipeline.status)
 
     self.context.evaluate(self.pipeline_key)
-    second_after_record = db.get(self.slot_key)
+    second_after_record = self.slot_key.get()
     self.assertEqual(_SlotRecord.FILLED, second_after_record.status)
     self.assertTrue(second_after_record.fill_time is not None)
 
@@ -2465,17 +2412,17 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.class_path = '{}.DumbAsync'.format(__name__)
     self.slot_record.status = _SlotRecord.FILLED
     self.slot_record.value_text = json.dumps(None)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
-    after_pipeline = db.get(self.pipeline_key)
+    after_pipeline = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_pipeline.status)
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    second_after_record = db.get(self.pipeline_key)
+    second_after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
     # Finalized time will stay the same.
@@ -2490,10 +2437,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.finalized_time = now
     self.slot_record.status = _SlotRecord.FILLED
     self.slot_record.value_text = json.dumps(None)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
     # Finalize time stays the same.
@@ -2502,17 +2449,17 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testNonYieldingGeneratorWaitingFilled(self):
     """Tests a waiting, non-yielding generator will fill its output slot."""
     self.pipeline_record.class_path = '{}.DumbGenerator'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
-    self.assertEqual(_SlotRecord.WAITING, db.get(self.slot_key).status)
+    self.assertEqual(_SlotRecord.WAITING, self.slot_key.get().status)
     self.context.evaluate(self.pipeline_key)
 
     # Output slot is filled.
-    after_slot = db.get(self.slot_key)
+    after_slot = self.slot_key.get()
     self.assertEqual(_SlotRecord.FILLED, after_slot.status)
 
     # Pipeline is now in the run state.
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.RUN, after_record.status)
 
   def testNonYieldingGeneratorRunNotFilledRerun(self):
@@ -2523,13 +2470,13 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """
     self.pipeline_record.class_path = '{}.DumbGenerator'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.RUN
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
-    self.assertEqual(_SlotRecord.WAITING, db.get(self.slot_key).status)
+    self.assertEqual(_SlotRecord.WAITING, self.slot_key.get().status)
     self.context.evaluate(self.pipeline_key)
 
     # Output slot is filled.
-    after_slot = db.get(self.slot_key)
+    after_slot = self.slot_key.get()
     self.assertEqual(_SlotRecord.FILLED, after_slot.status)
 
   def testGeneratorRunReRun(self):
@@ -2537,15 +2484,15 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.class_path = '{}.DumbGeneratorYields'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.RUN
     self.pipeline_record.fanned_out = [self.pipeline2_key]
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
     self.context.evaluate(self.pipeline_key)
     # Output slot wasn't filled.
-    after_slot = db.get(self.slot_key)
+    after_slot = self.slot_key.get()
     self.assertEqual(_SlotRecord.WAITING, after_slot.status)
 
     # Status hasn't changed.
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.RUN, after_record.status)
 
   def testGeneratorFinalizingRerun(self):
@@ -2554,14 +2501,14 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.status = _PipelineRecord.RUN
     self.slot_record.status = _SlotRecord.FILLED
     self.slot_record.value_text = json.dumps(None)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    second_after_record = db.get(self.pipeline_key)
+    second_after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
     # Finalized time will stay the same.
@@ -2576,10 +2523,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.finalized_time = now
     self.slot_record.status = _SlotRecord.FILLED
     self.slot_record.value_text = json.dumps(None)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.FINALIZE)
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.DONE, after_record.status)
 
     # Finalize time stays the same.
@@ -2588,11 +2535,11 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testFromIdFails(self):
     """Tests when evaluate's call to from_id fails a retry attempt is made."""
     self.pipeline_record.class_path = '{}.DiesOnCreation'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.assertEqual(0, self.pipeline_record.current_attempt)
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.START)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertEqual('Exception: This will not work!',
@@ -2602,13 +2549,13 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """Tests when the task's current attempt does not match the datastore."""
     self.pipeline_record.class_path = '{}.DiesOnRun'.format(__name__)
     self.pipeline_record.current_attempt = 3
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key,
                           purpose=_BarrierRecord.START,
                           attempt=1)
 
     # Didn't run because no state change occurred, retry count is the same.
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(3, after_record.current_attempt)
     self.assertEqual(None, after_record.retry_message)
@@ -2621,13 +2568,13 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.class_path = '{}.DiesOnRun'.format(__name__)
     self.pipeline_record.current_attempt = 5
     self.pipeline_record.max_attempts = 3
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key,
                           purpose=_BarrierRecord.START,
                           attempt=5)
 
     # Didn't run because no state change occurred, retry count is the same.
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(5, after_record.current_attempt)
     self.assertEqual(None, after_record.retry_message)
@@ -2639,7 +2586,7 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.current_attempt = 1
     self.pipeline_record.max_attempts = 3
     self.pipeline_record.next_retry_time = now + datetime.timedelta(seconds=30)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
 
     self.assertRaises(
         pipeline.UnexpectedPipelineError,
@@ -2649,7 +2596,7 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
         attempt=1)
 
     # Didn't run because no state change occurred, retry count is the same.
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertEqual(None, after_record.retry_message)
@@ -2657,11 +2604,11 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testRunExceptionRetry(self):
     """Tests that exceptions in Sync/Async pipelines cause a retry."""
     self.pipeline_record.class_path = '{}.DiesOnRun'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.assertEqual(0, self.pipeline_record.current_attempt)
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.START)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertEqual('Exception: Cannot run this one!',
@@ -2670,11 +2617,11 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testRunForceRetry(self):
     """Tests that explicit Retry on a synchronous pipeline."""
     self.pipeline_record.class_path = '{}.RetriesOnRun'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.assertEqual(0, self.pipeline_record.current_attempt)
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.START)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertEqual('Gotta go and retry now!',
@@ -2683,11 +2630,11 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testGeneratorExceptionRetry(self):
     """Tests that exceptions in a generator pipeline cause a retry."""
     self.pipeline_record.class_path = '{}.DiesAfterYield'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.assertEqual(0, self.pipeline_record.current_attempt)
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.START)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertEqual('Exception: Whoops I will die now!',
@@ -2696,11 +2643,11 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
   def testGeneratorForceRetry(self):
     """Tests when a generator raises a user-initiated retry exception."""
     self.pipeline_record.class_path = '{}.RetryAfterYield'.format(__name__)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.assertEqual(0, self.pipeline_record.current_attempt)
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.START)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertEqual('I want to retry now!', after_record.retry_message)
@@ -2710,10 +2657,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.class_path = '{}.DumbSync'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.WAITING
     self.assertTrue(self.pipeline_record.finalized_time is None)
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.ABORT)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
     self.assertEqual(0, after_record.current_attempt)
     self.assertTrue(after_record.retry_message is None)
@@ -2726,10 +2673,8 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
         root_pipeline=self.pipeline2_key,
         status=_PipelineRecord.RUN,
         class_path='does.not.exist',
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps({
-                 'output_slots': {'default': str(self.slot_key)},
+        params_text=json.dumps({
+                 'output_slots': {'default': self.slot_key.urlsafe().decode()},
                  'args': [],
                  'kwargs': {},
                  'task_retry': False,
@@ -2748,10 +2693,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     self.pipeline_record.class_path = '{}.DiesOnRun'.format(__name__)
     self.pipeline_record.root_pipeline = self.pipeline2_key
 
-    db.put([self.pipeline_record, self.slot_record, root_pipeline])
+    ndb.put_multi([self.pipeline_record, self.slot_record, root_pipeline])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.START)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
     self.assertEqual(0, after_record.current_attempt)
     self.assertTrue(after_record.retry_message is None)
@@ -2766,10 +2711,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """
     self.pipeline_record.class_path = '{}.DumbSync'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.WAITING
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.ABORT)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
     self.assertEqual(0, after_record.current_attempt)
     self.assertTrue(after_record.retry_message is None)
@@ -2778,7 +2723,7 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
 
     # Run a second time-- this should be ignored.
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.ABORT)
-    after_record2 = db.get(self.pipeline_key)
+    after_record2 = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
     self.assertEqual(0, after_record2.current_attempt)
     self.assertTrue(after_record2.retry_message is None)
@@ -2792,10 +2737,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """
     self.pipeline_record.class_path = '{}.DumbAsync'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.WAITING
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.ABORT)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
     self.assertEqual(0, after_record.current_attempt)
     self.assertTrue(after_record.retry_message is None)
@@ -2806,10 +2751,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """Tests when an async pipeline receives abort but try_cancel is False."""
     self.pipeline_record.class_path = '{}.AsyncCannotAbort'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.RUN
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.ABORT)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.RUN, after_record.status)
     self.assertEqual(0, after_record.current_attempt)
     self.assertTrue(after_record.retry_message is None)
@@ -2820,10 +2765,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """Tests when an async pipeline receives abort but try_cancel is True."""
     self.pipeline_record.class_path = '{}.AsyncCanAbort'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.RUN
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.ABORT)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
     self.assertEqual(0, after_record.current_attempt)
     self.assertTrue(after_record.retry_message is None)
@@ -2834,10 +2779,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """Tests when a generator raises an abort after it's begun yielding."""
     self.pipeline_record.class_path = '{}.AbortAfterYield'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.RUN
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.ABORT)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
     self.assertEqual(0, after_record.current_attempt)
     self.assertTrue(after_record.retry_message is None)
@@ -2848,10 +2793,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """Tests when a sync pipeline does not fill a slot that it will retry."""
     self.pipeline_record.class_path = '{}.SyncMissedOutput'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.WAITING
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertEqual(
@@ -2863,10 +2808,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """Tests non-yielding pipelines that do not fill a slot will retry."""
     self.pipeline_record.class_path = '{}.GeneratorMissedOutput'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.WAITING
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertEqual(
@@ -2882,21 +2827,21 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
          'slot_key': 'aglteS1hcHAtaWRyGQsSEF9BRV9DYXNjYWRlX1Nsb3QiA3JlZAw'}
     ]
     self.pipeline_record.status = _PipelineRecord.WAITING
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.ABORT)
 
     # Forced into the abort state.
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.ABORTED, after_record.status)
 
   def testPassBadValue(self):
     """Tests when a pipeline passes a non-serializable value to a child."""
     self.pipeline_record.class_path = '{}.PassBadValue'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.WAITING
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.START)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertIn('Bad child arguments. TypeError', after_record.retry_message)
@@ -2908,10 +2853,10 @@ class TaskRunningTest(test_shared.TaskRunningMixin, TestBase):
     """Tests when a pipeline returns a non-serializable value."""
     self.pipeline_record.class_path = '{}.ReturnBadValue'.format(__name__)
     self.pipeline_record.status = _PipelineRecord.WAITING
-    db.put([self.pipeline_record, self.slot_record])
+    ndb.put_multi([self.pipeline_record, self.slot_record])
     self.context.evaluate(self.pipeline_key, purpose=_BarrierRecord.START)
 
-    after_record = db.get(self.pipeline_key)
+    after_record = self.pipeline_key.get()
     self.assertEqual(_PipelineRecord.WAITING, after_record.status)
     self.assertEqual(1, after_record.current_attempt)
     self.assertIn('Bad return value. TypeError', after_record.retry_message)
@@ -2999,7 +2944,7 @@ class PublicPipeline(pipeline.Pipeline):
     return (200, 'text/plain', repr(kwargs))
 
 
-class DummyKind(db.Expando):
+class DummyKind(ndb.Expando):
   pass
 
 
@@ -3007,7 +2952,7 @@ class NoTransactionPipeline(PublicPipeline):
   """Pipeline that verifies the callback is executed outside a transaction."""
 
   def callback(self, **kwargs):
-    if db.is_in_transaction():
+    if ndb.in_transaction():
       try:
         # If we are in non xg-transaction, we should be unable to write to 24
         # new entity groups (1 is used to read pipeline state).
@@ -3018,9 +2963,9 @@ class NoTransactionPipeline(PublicPipeline):
           # Verify something is not wrong in the testbed and/or limits changed
           DummyKind().put()
           return (500, 'text/plain', 'More than 5 entity groups used.')
-        except db.BadRequestError:
+        except BadRequestError:
           return (203, 'text/plain', 'In a XG transaction')
-      except db.BadRequestError:
+      except BadRequestError:
         return (202, 'text/plain', 'In a non-XG transaction')
     else:
       return (201, 'text/plain', 'Outside a transaction.')
@@ -3058,7 +3003,7 @@ class CallbackHandlerTest(TestBase):
     stage = InternalOnlyPipeline()
     stage.start()
 
-    pipeline_record = pipeline.models._PipelineRecord.get_by_key_name(
+    pipeline_record = pipeline.models._PipelineRecord.get_by_id(
         stage.pipeline_id)
     params = pipeline_record.params
     params['class_path'] = 'does.not.exist'
@@ -3144,19 +3089,19 @@ class CleanupHandlerTest(test_shared.TaskRunningMixin, TestBase):
 
   def testSuccess(self):
     """Tests successfully deleting all child pipeline elements."""
-    self.assertEqual(0, len(list(_PipelineRecord.all())))
-    self.assertEqual(0, len(list(_SlotRecord.all())))
-    self.assertEqual(0, len(list(_BarrierRecord.all())))
-    self.assertEqual(0, len(list(_StatusRecord.all())))
+    self.assertEqual(0, len(_PipelineRecord.query().fetch()))
+    self.assertEqual(0, len(_SlotRecord.query().fetch()))
+    self.assertEqual(0, len(_BarrierRecord.query().fetch()))
+    self.assertEqual(0, len(_StatusRecord.query().fetch()))
 
     stage = OutputlessPipeline()
     stage.start(idempotence_key='banana')
     stage.set_status('My status here!')
-    self.assertEqual(1, len(list(_PipelineRecord.all())))
-    self.assertEqual(1, len(list(_SlotRecord.all())))
-    self.assertEqual(1, len(list(_BarrierRecord.all())))
-    self.assertEqual(1, len(list(_StatusRecord.all())))
-    self.assertEqual(1, len(list(_BarrierIndex.all())))
+    self.assertEqual(1, len(_PipelineRecord.query().fetch()))
+    self.assertEqual(1, len(_SlotRecord.query().fetch()))
+    self.assertEqual(1, len(_BarrierRecord.query().fetch()))
+    self.assertEqual(1, len(_StatusRecord.query().fetch()))
+    self.assertEqual(1, len(_BarrierIndex.query().fetch()))
 
     stage.cleanup()
     task_list = self.get_tasks()
@@ -3168,11 +3113,11 @@ class CleanupHandlerTest(test_shared.TaskRunningMixin, TestBase):
       if task['url'] == '/_ah/pipeline/cleanup':
         self.run_task(task)
 
-    self.assertEqual(0, len(list(_PipelineRecord.all())))
-    self.assertEqual(0, len(list(_SlotRecord.all())))
-    self.assertEqual(0, len(list(_BarrierRecord.all())))
-    self.assertEqual(0, len(list(_StatusRecord.all())))
-    self.assertEqual(0, len(list(_BarrierIndex.all())))
+    self.assertEqual(0, len(_PipelineRecord.query().fetch()))
+    self.assertEqual(0, len(_SlotRecord.query().fetch()))
+    self.assertEqual(0, len(_BarrierRecord.query().fetch()))
+    self.assertEqual(0, len(_StatusRecord.query().fetch()))
+    self.assertEqual(0, len(_BarrierIndex.query().fetch()))
 
 
 class FanoutHandlerTest(test_shared.TaskRunningMixin, TestBase):
@@ -3191,11 +3136,11 @@ class FanoutHandlerTest(test_shared.TaskRunningMixin, TestBase):
     fanout_task = task_list[0]
     self.assertEqual('/_ah/pipeline/fanout', fanout_task['url'])
 
-    after_record = db.get(stage._pipeline_key)
+    after_record = stage._pipeline_key.get()
 
     fanout_task['body'] = base64.b64encode(urllib.parse.urlencode(
-      [('pipeline_key', after_record.fanned_out[0]),
-       ('pipeline_key', after_record.fanned_out[1])]).encode('utf-8'))
+      [('pipeline_key', after_record.fanned_out[0].urlsafe().decode()),
+       ('pipeline_key', after_record.fanned_out[1].urlsafe().decode())]).encode('utf-8'))
     test_shared.delete_tasks(task_list)
     self.run_task(fanout_task)
 
@@ -3206,7 +3151,7 @@ class FanoutHandlerTest(test_shared.TaskRunningMixin, TestBase):
     for task in task_list:
       self.assertEqual('/_ah/pipeline/run', task['url'])
     children_keys = [
-        db.Key(t['params']['pipeline_key'][0]) for t in task_list]
+        ndb.Key(urlsafe=t['params']['pipeline_key'][0]) for t in task_list]
 
     self.assertEqual(set(children_keys), set(after_record.fanned_out))
 
@@ -3214,24 +3159,24 @@ class FanoutHandlerTest(test_shared.TaskRunningMixin, TestBase):
 ################################################################################
 # Begin functional test section!
 
-class RunOrder(db.Model):
+class RunOrder(ndb.Model):
   """Saves the order of method calls."""
 
-  order = db.ListProperty(db.Text)
+  order = ndb.TextProperty(repeated=True)
 
   @classmethod
   def add(cls, message):
     def txn():
-      runorder = RunOrder.get_by_key_name('singleton')
+      runorder = RunOrder.get_by_id('singleton')
       if runorder is None:
-        runorder = RunOrder(key_name='singleton')
-      runorder.order.append(db.Text(message))
+        runorder = RunOrder(id='singleton')
+      runorder.order.append(message)
       runorder.put()
-    db.run_in_transaction(txn)
+    ndb.transaction(txn)
 
   @classmethod
   def get(cls):
-    runorder = RunOrder.get_by_key_name('singleton')
+    runorder = RunOrder.get_by_id('singleton')
     if runorder is None:
       return []
     else:
@@ -4220,12 +4165,12 @@ class StatusTest(TestBase):
 
     self.fill_time = datetime.datetime(2010, 12, 10, 13, 55, 16, 416567)
 
-    self.pipeline1_key = db.Key.from_path(_PipelineRecord.kind(), 'one')
-    self.pipeline2_key = db.Key.from_path(_PipelineRecord.kind(), 'two')
-    self.pipeline3_key = db.Key.from_path(_PipelineRecord.kind(), 'three')
-    self.slot1_key = db.Key.from_path(_SlotRecord.kind(), 'red')
-    self.slot2_key = db.Key.from_path(_SlotRecord.kind(), 'blue')
-    self.slot3_key = db.Key.from_path(_SlotRecord.kind(), 'green')
+    self.pipeline1_key = ndb.Key(_PipelineRecord, 'one')
+    self.pipeline2_key = ndb.Key(_PipelineRecord, 'two')
+    self.pipeline3_key = ndb.Key(_PipelineRecord, 'three')
+    self.slot1_key = ndb.Key(_SlotRecord, 'red')
+    self.slot2_key = ndb.Key(_SlotRecord, 'blue')
+    self.slot3_key = ndb.Key(_SlotRecord, 'green')
 
     self.slot1_record = _SlotRecord(
         key=self.slot1_key,
@@ -4250,66 +4195,60 @@ class StatusTest(TestBase):
     }
     self.params1 = self.base_params.copy()
     self.params1.update({
-       'output_slots': {'default': str(self.slot1_key)},
+       'output_slots': {'default': self.slot1_key.urlsafe().decode()},
     })
     self.params2 = self.base_params.copy()
     self.params2.update({
-       'output_slots': {'default': str(self.slot2_key)},
+       'output_slots': {'default': self.slot2_key.urlsafe().decode()},
     })
     self.params3 = self.base_params.copy()
     self.params3.update({
-       'output_slots': {'default': str(self.slot3_key)},
+       'output_slots': {'default': self.slot3_key.urlsafe().decode()},
     })
 
     self.pipeline1_record = _PipelineRecord(
         root_pipeline=self.pipeline1_key,
         status=_PipelineRecord.RUN,
         class_path='does.not.exist1',
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(self.params1),
+        params_text=json.dumps(self.params1),
         key=self.pipeline1_key,
         max_attempts=4)
     self.pipeline2_record = _PipelineRecord(
         root_pipeline=self.pipeline1_key,
         status=_PipelineRecord.WAITING,
         class_path='does.not.exist2',
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(self.params2),
+        params_text=json.dumps(self.params2),
         key=self.pipeline2_key,
         max_attempts=3)
     self.pipeline3_record = _PipelineRecord(
         root_pipeline=self.pipeline1_key,
         status=_PipelineRecord.DONE,
         class_path='does.not.exist3',
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(self.params3),
+        params_text=json.dumps(self.params3),
         key=self.pipeline3_key,
         max_attempts=2)
 
     self.barrier1_record = _BarrierRecord(
         parent=self.pipeline1_key,
-        key_name=_BarrierRecord.FINALIZE,
+        id=_BarrierRecord.FINALIZE,
         target=self.pipeline1_key,
         root_pipeline=self.pipeline1_key,
         blocking_slots=[self.slot1_key])
     self.barrier2_record = _BarrierRecord(
         parent=self.pipeline2_key,
-        key_name=_BarrierRecord.FINALIZE,
+        id=_BarrierRecord.FINALIZE,
         target=self.pipeline2_key,
         root_pipeline=self.pipeline1_key,
         blocking_slots=[self.slot2_key])
     self.barrier2_record_start = _BarrierRecord(
         parent=self.pipeline2_key,
-        key_name=_BarrierRecord.START,
+        id=_BarrierRecord.START,
         target=self.pipeline2_key,
         root_pipeline=self.pipeline1_key,
         blocking_slots=[])
     self.barrier3_record = _BarrierRecord(
         parent=self.pipeline3_key,
-        key_name=_BarrierRecord.FINALIZE,
+        id=_BarrierRecord.FINALIZE,
         target=self.pipeline3_key,
         root_pipeline=self.pipeline1_key,
         blocking_slots=[self.slot3_key])
@@ -4333,7 +4272,7 @@ class StatusTest(TestBase):
       pipeline._get_internal_status(
           pipeline_key=self.pipeline1_key,
           pipeline_dict={self.pipeline1_key: self.pipeline1_record},
-          barrier_dict={self.barrier1_record.key(): self.barrier1_record})
+          barrier_dict={self.barrier1_record.key: self.barrier1_record})
       self.fail('Did not raise')
     except pipeline.PipelineStatusError as e:
       self.assertEqual(
@@ -4363,7 +4302,7 @@ class StatusTest(TestBase):
       'currentAttempt': 1,
       'afterSlotKeys': [],
       'outputs': {
-        'default': str(self.slot1_key),
+        'default': self.slot1_key.urlsafe().decode(),
       },
       'args': [],
       'classPath': 'does.not.exist1',
@@ -4380,7 +4319,7 @@ class StatusTest(TestBase):
         pipeline_key=self.pipeline1_key,
         pipeline_dict={self.pipeline1_key: self.pipeline1_record},
         slot_dict={self.slot1_key: self.slot1_record},
-        barrier_dict={self.barrier1_record.key(): self.barrier1_record}))
+        barrier_dict={self.barrier1_record.key: self.barrier1_record}))
 
   def testGetInternalStatus_Retry(self):
     """Tests for _get_internal_status when the status is retry."""
@@ -4394,7 +4333,7 @@ class StatusTest(TestBase):
       'afterSlotKeys': [],
       'startTimeMs': 1291989316416,
       'outputs': {
-        'default': str(self.slot2_key),
+        'default': self.slot2_key.urlsafe().decode(),
       },
       'args': [],
       'classPath': 'does.not.exist2',
@@ -4410,7 +4349,7 @@ class StatusTest(TestBase):
         pipeline_key=self.pipeline2_key,
         pipeline_dict={self.pipeline2_key: self.pipeline2_record},
         slot_dict={self.slot2_key: self.slot1_record},
-        barrier_dict={self.barrier2_record.key(): self.barrier2_record}))
+        barrier_dict={self.barrier2_record.key: self.barrier2_record}))
 
   def testGetInternalStatus_Waiting(self):
     """Tests for _get_internal_status when the status is waiting."""
@@ -4419,7 +4358,7 @@ class StatusTest(TestBase):
       'currentAttempt': 1,
       'afterSlotKeys': [],
       'outputs': {
-        'default': str(self.slot2_key)
+        'default': self.slot2_key.urlsafe().decode(),
       },
       'args': [],
       'classPath': 'does.not.exist2',
@@ -4436,8 +4375,8 @@ class StatusTest(TestBase):
         pipeline_dict={self.pipeline2_key: self.pipeline2_record},
         slot_dict={self.slot2_key: self.slot1_record},
         barrier_dict={
-            self.barrier2_record.key(): self.barrier2_record,
-            self.barrier2_record_start.key(): self.barrier2_record_start}))
+            self.barrier2_record.key: self.barrier2_record,
+            self.barrier2_record_start.key: self.barrier2_record_start}))
 
   def testGetInternalStatus_Run(self):
     """Tests for _get_internal_status when the status is run."""
@@ -4449,7 +4388,7 @@ class StatusTest(TestBase):
       'afterSlotKeys': [],
       'startTimeMs': 1291989316416,
       'outputs': {
-        'default': str(self.slot1_key)
+        'default': self.slot1_key.urlsafe().decode(),
       },
       'args': [],
       'classPath': 'does.not.exist1',
@@ -4465,7 +4404,7 @@ class StatusTest(TestBase):
         pipeline_key=self.pipeline1_key,
         pipeline_dict={self.pipeline1_key: self.pipeline1_record},
         slot_dict={self.slot1_key: self.slot1_record},
-        barrier_dict={self.barrier1_record.key(): self.barrier1_record}))
+        barrier_dict={self.barrier1_record.key: self.barrier1_record}))
 
   def testGetInternalStatus_RunAfterRetry(self):
     """Tests _get_internal_status when a stage is re-run on retrying."""
@@ -4481,7 +4420,7 @@ class StatusTest(TestBase):
       'afterSlotKeys': [],
       'startTimeMs': 1291989316416,
       'outputs': {
-        'default': str(self.slot1_key)
+        'default': self.slot1_key.urlsafe().decode(),
       },
       'args': [],
       'classPath': 'does.not.exist1',
@@ -4497,7 +4436,7 @@ class StatusTest(TestBase):
         pipeline_key=self.pipeline1_key,
         pipeline_dict={self.pipeline1_key: self.pipeline1_record},
         slot_dict={self.slot1_key: self.slot1_record},
-        barrier_dict={self.barrier1_record.key(): self.barrier1_record}))
+        barrier_dict={self.barrier1_record.key: self.barrier1_record}))
 
   def testGetInternalStatus_Aborted(self):
     """Tests for _get_internal_status when the status is aborted."""
@@ -4510,7 +4449,7 @@ class StatusTest(TestBase):
       'afterSlotKeys': [],
       'abortMessage': 'I had to bail',
       'outputs': {
-        'default': str(self.slot1_key),
+        'default': self.slot1_key.urlsafe().decode(),
       },
       'args': [],
       'classPath': 'does.not.exist1',
@@ -4526,7 +4465,7 @@ class StatusTest(TestBase):
         pipeline_key=self.pipeline1_key,
         pipeline_dict={self.pipeline1_key: self.pipeline1_record},
         slot_dict={self.slot1_key: self.slot1_record},
-        barrier_dict={self.barrier1_record.key(): self.barrier1_record}))
+        barrier_dict={self.barrier1_record.key: self.barrier1_record}))
 
   def testGetInternalStatus_MoreParams(self):
     """Tests for _get_internal_status with children, slots, and outputs."""
@@ -4542,11 +4481,11 @@ class StatusTest(TestBase):
         'second_arg': {'type': 'value', 'value': 1234},
     }
     self.pipeline1_record.params['output_slots'] = {
-      'default': str(self.slot1_key),
-      'another_one': str(self.slot2_key),
+      'default': self.slot1_key.urlsafe().decode(),
+      'another_one': self.slot2_key.urlsafe().decode(),
     }
     self.pipeline1_record.params['after_all'] = [
-      str(self.slot2_key),
+      self.slot2_key.urlsafe().decode(),
     ]
 
     expected = {
@@ -4581,17 +4520,17 @@ class StatusTest(TestBase):
         pipeline_key=self.pipeline1_key,
         pipeline_dict={self.pipeline1_key: self.pipeline1_record},
         slot_dict={self.slot1_key: self.slot1_record},
-        barrier_dict={self.barrier1_record.key(): self.barrier1_record}))
+        barrier_dict={self.barrier1_record.key: self.barrier1_record}))
 
   def testGetInternalStatus_StatusRecord(self):
     """Tests for _get_internal_status when the status record is present."""
     status_record = _StatusRecord(
-        key=db.Key.from_path(_StatusRecord.kind(), self.pipeline1_key.name()),
+        key=ndb.Key(_StatusRecord, self.pipeline1_key.string_id()),
         message='My status message',
         status_time=self.fill_time,
         console_url='/path/to/console',
-        link_names=[db.Text(x) for x in ('one', 'two', 'three')],
-        link_urls=[db.Text(x) for x in ('/first', '/second', '/third')],
+        link_names=['one', 'two', 'three'],
+        link_urls=['/first', '/second', '/third'],
         root_pipeline=self.pipeline1_key)
 
     expected = {
@@ -4600,7 +4539,7 @@ class StatusTest(TestBase):
         'afterSlotKeys': [],
         'statusTimeMs': 1291989316416,
         'outputs': {
-          'default': str(self.slot1_key)
+          'default': self.slot1_key.urlsafe().decode(),
         },
         'args': [],
         'classPath': 'does.not.exist1',
@@ -4623,8 +4562,8 @@ class StatusTest(TestBase):
         pipeline_key=self.pipeline1_key,
         pipeline_dict={self.pipeline1_key: self.pipeline1_record},
         slot_dict={self.slot1_key: self.slot1_record},
-        barrier_dict={self.barrier1_record.key(): self.barrier1_record},
-        status_dict={status_record.key(): status_record}))
+        barrier_dict={self.barrier1_record.key: self.barrier1_record},
+        status_dict={status_record.key: status_record}))
 
   def testGetInternalSlot_Missing(self):
     """Tests _get_internal_slot when the slot is missing."""
@@ -4675,26 +4614,24 @@ class StatusTest(TestBase):
   def testGetStatusTree_RootMissing(self):
     """Tests get_status_tree when the root pipeline is missing."""
     try:
-      pipeline.get_status_tree(self.pipeline1_key.name())
+      pipeline.get_status_tree(self.pipeline1_key.string_id())
       self.fail('Did not raise')
     except pipeline.PipelineStatusError as e:
       self.assertEqual('Could not find pipeline ID "one"', str(e))
 
   def testGetStatusTree_NotRoot(self):
     """Tests get_status_tree when the pipeline query is not the root."""
-    found1_root = _PipelineRecord.root_pipeline.get_value_for_datastore(
-        self.pipeline1_record)
-    found2_root = _PipelineRecord.root_pipeline.get_value_for_datastore(
-        self.pipeline2_record)
+    found1_root = self.pipeline1_record.root_pipeline
+    found2_root = self.pipeline2_record.root_pipeline
 
     self.assertEqual(found1_root, self.pipeline1_key)
     self.assertEqual(found2_root, self.pipeline1_key)
 
-    db.put([self.pipeline1_record, self.pipeline2_record,
+    ndb.put_multi([self.pipeline1_record, self.pipeline2_record,
             self.slot1_record, self.slot2_record,
             self.barrier1_record, self.barrier2_record])
 
-    pipeline.get_status_tree(self.pipeline2_key.name())
+    pipeline.get_status_tree(self.pipeline2_key.string_id())
 
     expected = {
         'pipelines': {
@@ -4709,7 +4646,7 @@ class StatusTest(TestBase):
                 'kwargs': {},
                 'maxAttempts': 4,
                 'outputs': {
-                    'default': str(self.slot1_key),
+                    'default': self.slot1_key.urlsafe().decode()
                 },
                 'queueName': 'default',
                 'status': 'run',
@@ -4721,24 +4658,22 @@ class StatusTest(TestBase):
 
     self.assertEqual(
         expected,
-        pipeline.get_status_tree(self.pipeline2_key.name()))
+        pipeline.get_status_tree(self.pipeline2_key.string_id()))
 
   def testGetStatusTree_NotRoot_MissingParent(self):
     """Tests get_status_tree with a non-root pipeline and missing parent."""
-    found1_root = _PipelineRecord.root_pipeline.get_value_for_datastore(
-        self.pipeline1_record)
-    found2_root = _PipelineRecord.root_pipeline.get_value_for_datastore(
-        self.pipeline2_record)
+    found1_root = self.pipeline1_record.root_pipeline
+    found2_root = self.pipeline2_record.root_pipeline
 
     self.assertEqual(found1_root, self.pipeline1_key)
     self.assertEqual(found2_root, self.pipeline1_key)
 
     # Don't put pipeline1_record
-    db.put([self.pipeline2_record, self.slot1_record, self.slot2_record,
+    ndb.put_multi([self.pipeline2_record, self.slot1_record, self.slot2_record,
             self.barrier1_record, self.barrier2_record])
 
     try:
-      pipeline.get_status_tree(self.pipeline1_key.name())
+      pipeline.get_status_tree(self.pipeline1_key.string_id())
       self.fail('Did not raise')
     except pipeline.PipelineStatusError as e:
       self.assertEqual('Could not find pipeline ID "one"', str(e))
@@ -4746,10 +4681,10 @@ class StatusTest(TestBase):
   def testGetStatusTree_ChildMissing(self):
     """Tests get_status_tree when a fanned out child pipeline is missing."""
     self.pipeline1_record.fanned_out = [self.pipeline2_key]
-    db.put([self.pipeline1_record, self.barrier1_record, self.slot1_record])
+    ndb.put_multi([self.pipeline1_record, self.barrier1_record, self.slot1_record])
 
     try:
-      pipeline.get_status_tree(self.pipeline1_key.name())
+      pipeline.get_status_tree(self.pipeline1_key.string_id())
       self.fail('Did not raise')
     except pipeline.PipelineStatusError as e:
       self.assertEqual(
@@ -4764,18 +4699,16 @@ class StatusTest(TestBase):
 
     # This one looks like a child, but it will be ignored since it is not
     # reachable from the root via the fanned_out property.
-    bad_pipeline_key = db.Key.from_path(_PipelineRecord.kind(), 'ignored')
+    bad_pipeline_key = ndb.Key(_PipelineRecord, 'ignored')
     bad_pipeline_record = _PipelineRecord(
         root_pipeline=self.pipeline1_key,
         status=_PipelineRecord.RUN,
         class_path='does.not.exist4',
-        # Bug in DB means we need to use the storage name here,
-        # not the local property name.
-        params=json.dumps(self.params1),
+        params_text=json.dumps(self.params1),
         key=bad_pipeline_key,
         max_attempts=4)
 
-    db.put([
+    ndb.put_multi([
         self.pipeline1_record, self.pipeline2_record, self.pipeline3_record,
         self.barrier1_record, self.barrier2_record, self.barrier3_record,
         self.slot1_record, self.slot2_record, self.slot3_record,
@@ -4789,7 +4722,7 @@ class StatusTest(TestBase):
               'currentAttempt': 1,
               'afterSlotKeys': [],
               'outputs': {
-                  'default': str(self.slot3_key)
+                  'default': self.slot3_key.urlsafe().decode()
               },
               'args': [],
               'classPath': 'does.not.exist3',
@@ -4806,7 +4739,7 @@ class StatusTest(TestBase):
                 'currentAttempt': 1,
                 'afterSlotKeys': [],
                 'outputs': {
-                    'default': str(self.slot2_key)
+                    'default': self.slot2_key.urlsafe().decode()
                 },
                 'args': [],
                 'classPath': 'does.not.exist2',
@@ -4822,7 +4755,7 @@ class StatusTest(TestBase):
                 'currentAttempt': 1,
                 'afterSlotKeys': [],
                 'outputs': {
-                    'default': str(self.slot1_key)
+                    'default': self.slot1_key.urlsafe().decode()
                 },
                 'args': [],
                 'classPath': 'does.not.exist1',
@@ -4835,11 +4768,11 @@ class StatusTest(TestBase):
             }
         },
         'slots': {
-            str(self.slot2_key): {
+            self.slot2_key.urlsafe().decode(): {
                 'status': 'waiting',
                 'fillerPipelineId': 'two'
             },
-            str(self.slot3_key): {
+            self.slot3_key.urlsafe().decode(): {
                 'status': 'waiting',
                 'fillerPipelineId': 'three'
             }
@@ -4848,7 +4781,7 @@ class StatusTest(TestBase):
 
     self.assertEqual(
         expected,
-        pipeline.get_status_tree(self.pipeline1_key.name()))
+        pipeline.get_status_tree(self.pipeline1_key.string_id()))
 
   def testGetPipelineNames(self):
     """Tests the get_pipeline_names function."""
@@ -4893,12 +4826,10 @@ class StatusTest(TestBase):
     stage.start(idempotence_key='banana')
     stage.set_status('This one has a message')
 
-    stage_key = db.Key.from_path(
-        pipeline._PipelineRecord.kind(), stage.pipeline_id)
-    finalization_key = db.Key.from_path(
-        pipeline._BarrierRecord.kind(), _BarrierRecord.FINALIZE,
+    stage_key = ndb.Key(_PipelineRecord, stage.pipeline_id)
+    finalization_key = ndb.Key(_BarrierRecord, _BarrierRecord.FINALIZE,
         parent=stage_key)
-    db.delete(finalization_key)
+    finalization_key.delete()
 
     found = pipeline.get_root_list()
     self.assertFalse('cursor' in found)  # No next page available

@@ -24,7 +24,7 @@ import sys
 
 from flask import Flask, render_template, request, redirect
 from flask.views import MethodView
-from google.appengine.ext import db
+from google.appengine.ext import ndb
 from google.appengine.api import wrap_wsgi_app
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
@@ -44,15 +44,13 @@ class LongCount(pipeline.Pipeline):
     cursor = None
     count = 0
     while True:
-      query = db.GqlQuery(
+      query = ndb.gql(
           'SELECT * FROM {} WHERE {} = :1'.format(entity_kind, property_name),
           value.lower(), key_only=True, cursor=cursor)
-      result = query.fetch(1000)
+      result, cursor, more = query.fetch_page(1000)
       count += len(result)
-      if len(result) < 1000:
+      if not more:
         return (entity_kind, property_name, value, count)
-      else:
-        cursor = query.cursor()
 
 
 class SplitCount(pipeline.Pipeline):
@@ -96,7 +94,6 @@ class CountReport(pipeline.Pipeline):
 
     with pipeline.After(split_counts):
       with pipeline.InOrder():
-        yield common.Delay(seconds=1)
         yield common.Log.info('Done waiting')
 
   def finalized(self):
@@ -106,9 +103,9 @@ class CountReport(pipeline.Pipeline):
 ################################################################################
 # Silly guestbook application to run the pipelines on.
 
-class GuestbookPost(db.Model):
-  color = db.StringProperty()
-  write_time = db.DateTimeProperty(auto_now_add=True)
+class GuestbookPost(ndb.Model):
+  color = ndb.StringProperty()
+  write_time = ndb.DateTimeProperty(auto_now_add=True)
 
 
 class StartPipelineHandler(MethodView):
@@ -118,7 +115,7 @@ class StartPipelineHandler(MethodView):
   def post(self):
     colors = [color for color in request.form.getlist('color') if color]
     job = CountReport(
-        GuestbookPost.kind(),
+        GuestbookPost._get_kind(),
         'color',
         *colors)
     job.start()
@@ -127,7 +124,7 @@ class StartPipelineHandler(MethodView):
 
 class MainHandler(MethodView):
   def get(self):
-    posts = GuestbookPost.all().order('-write_time').fetch(100)
+    posts = GuestbookPost.query().order(-GuestbookPost.write_time).fetch(100)
     return render_template('guestbook.html', posts=posts)
 
   def post(self):

@@ -18,13 +18,13 @@
 
 import json
 
-from google.appengine.ext import blobstore, db
+from google.appengine.ext import ndb
 
 # Relative imports
 from . import util
 
 
-class _PipelineRecord(db.Model):
+class _PipelineRecord(ndb.Model):
   """Represents a Pipeline.
 
   Key name is a randomly assigned UUID. No parent entity.
@@ -52,40 +52,40 @@ class _PipelineRecord(db.Model):
     abort_requested: If an abort signal has been requested for this root
       pipeline; only saved on root pipelines
   """
+  _use_cache = False
+  _use_memcache = False
 
   WAITING = 'waiting'
   RUN = 'run'
   DONE = 'done'
   ABORTED = 'aborted'
 
-  class_path = db.StringProperty()
-  root_pipeline = db.SelfReferenceProperty(
-                      collection_name='child_pipelines_set')
-  fanned_out = db.ListProperty(db.Key, indexed=False)
-  start_time = db.DateTimeProperty(indexed=True)
-  finalized_time = db.DateTimeProperty(indexed=False)
+  class_path = ndb.StringProperty()
+  root_pipeline = ndb.KeyProperty(kind='_AE_Pipeline_Record') 
+  fanned_out = ndb.KeyProperty(repeated=True, indexed=False)
+  start_time = ndb.DateTimeProperty(indexed=True)
+  finalized_time = ndb.DateTimeProperty(indexed=False)
 
   # One of these two will be set, depending on the size of the params.
-  params_text = db.TextProperty(name='params')
-  params_blob = blobstore.BlobReferenceProperty(name='params_blob', indexed=False)
-  params_gcs = db.StringProperty(name='params_gcs', indexed=False)
+  params_text = ndb.TextProperty(name='params')
+  params_gcs = ndb.StringProperty(name='params_gcs', indexed=False)
 
-  status = db.StringProperty(choices=(WAITING, RUN, DONE, ABORTED),
+  status = ndb.StringProperty(choices=(WAITING, RUN, DONE, ABORTED),
                              default=WAITING)
 
   # Retry behavior
-  current_attempt = db.IntegerProperty(default=0, indexed=False)
-  max_attempts = db.IntegerProperty(default=1, indexed=False)
-  next_retry_time = db.DateTimeProperty(indexed=False)
-  retry_message = db.TextProperty()
+  current_attempt = ndb.IntegerProperty(default=0, indexed=False)
+  max_attempts = ndb.IntegerProperty(default=1, indexed=False)
+  next_retry_time = ndb.DateTimeProperty(indexed=False)
+  retry_message = ndb.TextProperty()
 
   # Root pipeline properties
-  is_root_pipeline = db.BooleanProperty()
-  abort_message = db.TextProperty()
-  abort_requested = db.BooleanProperty(indexed=False)
+  is_root_pipeline = ndb.BooleanProperty()
+  abort_message = ndb.TextProperty()
+  abort_requested = ndb.BooleanProperty(indexed=False)
 
   @classmethod
-  def kind(cls):
+  def _get_kind(cls):
     return '_AE_Pipeline_Record'
 
   @property
@@ -96,9 +96,7 @@ class _PipelineRecord(db.Model):
     if hasattr(self, '_params_decoded'):
       return self._params_decoded
 
-    if self.params_blob is not None:
-      value_encoded = self.params_blob.open().read()
-    elif self.params_gcs is not None:
+    if self.params_gcs is not None:
       value_encoded = read_blob_gcs(self.params_gcs)
     else:
       value_encoded = self.params_text
@@ -117,7 +115,7 @@ class _PipelineRecord(db.Model):
     return self._params_decoded
 
 
-class _SlotRecord(db.Model):
+class _SlotRecord(ndb.Model):
   """Represents an output slot.
 
   Key name is a randomly assigned UUID. No parent for slots of child pipelines.
@@ -131,25 +129,25 @@ class _SlotRecord(db.Model):
     status: The current status of the slot.
     fill_time: When the slot was filled by the filler.
   """
+  _use_cache = False
+  _use_memcache = False
 
   FILLED = 'filled'
   WAITING = 'waiting'
 
-  root_pipeline = db.ReferenceProperty(_PipelineRecord)
-  filler = db.ReferenceProperty(_PipelineRecord,
-                                collection_name='filled_slots_set')
+  root_pipeline = ndb.KeyProperty(kind=_PipelineRecord)
+  filler = ndb.KeyProperty(_PipelineRecord)
 
   # One of these two will be set, depending on the size of the value.
-  value_text = db.TextProperty(name='value')
-  value_blob = blobstore.BlobReferenceProperty(name='value_blob', indexed=False)
-  value_gcs = db.StringProperty(name='value_gcs', indexed=False)
+  value_text = ndb.TextProperty(name='value')
+  value_gcs = ndb.StringProperty(name='value_gcs', indexed=False)
 
-  status = db.StringProperty(choices=(FILLED, WAITING), default=WAITING,
+  status = ndb.StringProperty(choices=(FILLED, WAITING), default=WAITING,
                              indexed=False)
-  fill_time = db.DateTimeProperty(indexed=False)
+  fill_time = ndb.DateTimeProperty(indexed=False)
 
   @classmethod
-  def kind(cls):
+  def _get_kind(cls):
     return '_AE_Pipeline_Slot'
 
   @property
@@ -160,9 +158,7 @@ class _SlotRecord(db.Model):
     if hasattr(self, '_value_decoded'):
       return self._value_decoded
 
-    if self.value_blob is not None:
-      encoded_value = self.value_blob.open().read()
-    elif self.value_gcs is not None:
+    if self.value_gcs is not None:
       encoded_value = read_blob_gcs(self.value_gcs)
     else:
       encoded_value = self.value_text
@@ -171,7 +167,7 @@ class _SlotRecord(db.Model):
     return self._value_decoded
 
 
-class _BarrierRecord(db.Model):
+class _BarrierRecord(ndb.Model):
   """Represents a barrier.
 
   Key name is the purpose of the barrier (START or FINALIZE). Parent entity
@@ -195,20 +191,19 @@ class _BarrierRecord(db.Model):
   FINALIZE = 'finalize'
   ABORT = 'abort'
 
-  root_pipeline = db.ReferenceProperty(_PipelineRecord)
-  target = db.ReferenceProperty(_PipelineRecord,
-                                collection_name='called_barrier_set')
-  blocking_slots = db.ListProperty(db.Key)
-  trigger_time = db.DateTimeProperty(indexed=False)
-  status = db.StringProperty(choices=(FIRED, WAITING), default=WAITING,
+  root_pipeline = ndb.KeyProperty(kind=_PipelineRecord)
+  target = ndb.KeyProperty(kind=_PipelineRecord)
+  blocking_slots = ndb.KeyProperty(repeated=True, kind=_SlotRecord)
+  trigger_time = ndb.DateTimeProperty(indexed=False)
+  status = ndb.StringProperty(choices=(FIRED, WAITING), default=WAITING,
                              indexed=False)
 
   @classmethod
-  def kind(cls):
+  def _get_kind(cls):
     return '_AE_Pipeline_Barrier'
 
 
-class _BarrierIndex(db.Model):
+class _BarrierIndex(ndb.Model):
   """Indicates a _BarrierRecord that is dependent on a slot.
 
   Previously, when a _SlotRecord was filled, notify_barriers() would query for
@@ -245,10 +240,10 @@ class _BarrierIndex(db.Model):
   """
 
   # Enable this entity to be cleaned up.
-  root_pipeline = db.ReferenceProperty(_PipelineRecord)
+  root_pipeline = ndb.KeyProperty(kind=_PipelineRecord)
 
   @classmethod
-  def kind(cls):
+  def _get_kind(cls):
     return '_AE_Barrier_Index'
 
   @classmethod
@@ -261,7 +256,7 @@ class _BarrierIndex(db.Model):
     Returns:
       db.Key for the corresponding _BarrierRecord entity.
     """
-    barrier_index_path = barrier_index_key.to_path()
+    barrier_index_path = barrier_index_key.flat()
 
     # Pick out the items from the _BarrierIndex key path that we need to
     # construct the _BarrierRecord key path.
@@ -270,12 +265,12 @@ class _BarrierIndex(db.Model):
 
     barrier_record_path = (
         pipeline_kind, dependent_pipeline_id,
-        _BarrierRecord.kind(), purpose)
+        _BarrierRecord._get_kind(), purpose)
 
-    return db.Key.from_path(*barrier_record_path)
+    return ndb.Key(*barrier_record_path)
 
 
-class _StatusRecord(db.Model):
+class _StatusRecord(ndb.Model):
   """Represents the current status of a pipeline.
 
   Properties:
@@ -286,13 +281,13 @@ class _StatusRecord(db.Model):
     status_time: When the status was written.
   """
 
-  root_pipeline = db.ReferenceProperty(_PipelineRecord)
-  message = db.TextProperty()
-  console_url = db.TextProperty()
-  link_names = db.ListProperty(db.Text, indexed=False)
-  link_urls = db.ListProperty(db.Text, indexed=False)
-  status_time = db.DateTimeProperty(indexed=False)
+  root_pipeline = ndb.KeyProperty(kind=_PipelineRecord)
+  message = ndb.TextProperty()
+  console_url = ndb.TextProperty()
+  link_names = ndb.TextProperty(repeated=True, indexed=False)
+  link_urls = ndb.TextProperty(repeated=True, indexed=False)
+  status_time = ndb.DateTimeProperty(indexed=False)
 
   @classmethod
-  def kind(cls):
+  def _get_kind(cls):
     return '_AE_Pipeline_Status'
