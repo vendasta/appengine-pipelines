@@ -44,7 +44,7 @@ class LongCount(pipeline.Pipeline):
     cursor = None
     count = 0
     while True:
-      query = ndb.GqlQuery(
+      query = ndb.gql(
           'SELECT * FROM {} WHERE {} = :1'.format(entity_kind, property_name),
           value.lower(), key_only=True, cursor=cursor)
       result, cursor, more = query.fetch_page(1000)
@@ -94,7 +94,6 @@ class CountReport(pipeline.Pipeline):
 
     with pipeline.After(split_counts):
       with pipeline.InOrder():
-        yield common.Delay(seconds=1)
         yield common.Log.info('Done waiting')
 
   def finalized(self):
