@@ -3,6 +3,7 @@
 import base64
 import calendar
 import datetime
+import logging
 import os
 import random
 import urllib
@@ -111,7 +112,10 @@ class TaskRunningMixin:
       os.environ['HTTP_X_APPENGINE_QUEUENAME'] = self.queue_name
 
       with self.app.test_client() as c:
-          c.open(url, method=method, data=data, headers=headers)
+          response = c.open(url, method=method, data=data, headers=headers)
+          if response.status_code != 200:
+              logging.error('Task failed: %s %s %s %s %s %s',
+                            name, method, url, headers, data, response.data)
 
   def run_pipeline(self, pipeline, *args, **kwargs):
     """Runs the pipeline and returns outputs."""
