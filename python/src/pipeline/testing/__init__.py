@@ -10,9 +10,9 @@ import urllib
 import urllib.parse
 
 from flask import Flask
-from google.appengine.api import apiproxy_stub_map
 
 import pipeline
+from pipeline import taskqueue_test_stub
 
 # For convenience.
 _PipelineRecord = pipeline.models._PipelineRecord
@@ -20,23 +20,9 @@ _SlotRecord = pipeline.models._SlotRecord
 _BarrierRecord = pipeline.models._BarrierRecord
 
 def get_tasks(queue_name='default'):
-  """Gets pending tasks from a queue, adding a 'params' dictionary to them.
-
-  Code originally from:
-    http://code.google.com/p/pubsubhubbub/source/browse/trunk/hub/testutil.py
-  """
-  taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
-
-  stub_globals = taskqueue_stub.GetTasks.__globals__
-  old_format = stub_globals['_FormatEta']
-  # Yes-- this is a vicious hack to have the task queue stub return the
-  # ETA of tasks as datetime instances instead of text strings.
-  stub_globals['_FormatEta'] = \
-      lambda x: datetime.datetime.utcfromtimestamp(x / 1000000.0)
-  try:
-    task_list = taskqueue_stub.GetTasks(queue_name)
-  finally:
-    stub_globals['_FormatEta'] = old_format
+  """Gets pending tasks from a queue, adding a 'params' dictionary to them."""
+  stub = taskqueue_test_stub.get_test_stub()
+  task_list = stub.get_tasks(queue_name)
 
   adjusted_task_list = []
   for task in task_list:
@@ -51,11 +37,10 @@ def get_tasks(queue_name='default'):
 
 def delete_tasks(task_list, queue_name='default'):
   """Deletes a set of tasks from a queue."""
-  taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
+  stub = taskqueue_test_stub.get_test_stub()
   for task in task_list:
-    # NOTE: Use Delete here instead of DeleteTask because DeleteTask will remove the task's name from the list of
-    # tombstones, which will cause some tasks to run multiple times in tests if barriers fire twice.
-    taskqueue_stub._GetGroup().GetQueue(queue_name).Delete(task['name'])
+    # NOTE: Delete tasks but keep them in tombstones
+    stub.delete_task(queue_name, task['name'])
 
 def utc_to_local(utc_datetime):
     timestamp = calendar.timegm(utc_datetime.timetuple())
@@ -68,7 +53,11 @@ class TaskRunningMixin:
   def setUp(self):
     """Sets up the test harness."""
     super().setUp()
-    self.taskqueue_stub = apiproxy_stub_map.apiproxy.GetStub('taskqueue')
+    # Enable test mode for taskqueue
+    from pipeline import taskqueue_compat
+    taskqueue_compat.set_test_mode(True)
+    taskqueue_test_stub.reset_test_stub()
+
     self.queue_name = 'default'
     self.base_path = '/_ah/pipeline'
     self.test_mode = False
@@ -85,8 +74,8 @@ class TaskRunningMixin:
 
   def tearDown(self):
     """Make sure all tasks are deleted."""
-    if self.taskqueue_stub._queues.get(self.queue_name):
-      delete_tasks(self.get_tasks(), queue_name=self.queue_name)
+    stub = taskqueue_test_stub.get_test_stub()
+    delete_tasks(self.get_tasks(), queue_name=self.queue_name)
 
   def get_tasks(self):
     """Gets pending tasks, adding a 'params' dictionary to them."""

@@ -24,8 +24,7 @@ import sys
 
 from flask import Flask, render_template, request, redirect
 from flask.views import MethodView
-from google.appengine.ext import ndb
-from google.appengine.api import wrap_wsgi_app
+from google.cloud import ndb
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
@@ -136,7 +135,32 @@ class MainHandler(MethodView):
 
 app = Flask(__name__)
 
-app.wsgi_app = wrap_wsgi_app(app.wsgi_app, use_legacy_context_mode=True)
+# NDB context middleware for google-cloud-ndb
+@app.before_request
+def ndb_context():
+    """Create an NDB context for each request."""
+    # Context is automatically cleaned up after the request
+    pass
+
+# Use NDB context manager globally
+ndb_client = ndb.Client()
+
+@app.before_request
+def push_ndb_context():
+    """Push NDB context before each request."""
+    ctx = ndb_client.context()
+    ctx.__enter__()
+    # Store context in flask.g so we can exit it later
+    from flask import g
+    g.ndb_context = ctx
+
+@app.teardown_request
+def pop_ndb_context(exception=None):
+    """Pop NDB context after each request."""
+    from flask import g
+    ctx = getattr(g, 'ndb_context', None)
+    if ctx:
+        ctx.__exit__(None, None, None)
 
 app.add_url_rule('/', view_func=MainHandler.as_view('main'))
 app.add_url_rule('/pipeline', view_func=StartPipelineHandler.as_view('pipeline'))

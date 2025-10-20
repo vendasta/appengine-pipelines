@@ -1,21 +1,37 @@
 import logging
+import os
 import posixpath
 import time
 import uuid
 
 from google.api_core.exceptions import TooManyRequests
-from google.appengine.api import app_identity
 from google.cloud import storage
 
 client = storage.Client()
 
 def _get_default_bucket():
-  default_bucket = app_identity.get_default_gcs_bucket_name()
+  """Get the default GCS bucket for the application.
+
+  Returns the bucket specified in the GCS_BUCKET environment variable,
+  or falls back to the default App Engine bucket based on GAE_APPLICATION.
+  """
+  default_bucket = os.environ.get('GCS_BUCKET')
+
+  if default_bucket is None:
+    # Fall back to App Engine default bucket naming convention
+    # Format: <project-id>.appspot.com
+    app_id = os.environ.get('GAE_APPLICATION', os.environ.get('GOOGLE_CLOUD_PROJECT'))
+    if app_id:
+      # Remove the region prefix if present (e.g., "s~my-app" -> "my-app")
+      app_id = app_id.split('~')[-1]
+      default_bucket = f"{app_id}.appspot.com"
+
   if default_bucket is None:
     raise Exception(
-        "No default cloud storage bucket has been set for this application. "
-        "This app was likely created before v1.9.0, please see: "
-        "https://cloud.google.com/appengine/docs/php/googlestorage/setup")
+        "No default cloud storage bucket has been set. "
+        "Please set the GCS_BUCKET environment variable or ensure "
+        "GAE_APPLICATION or GOOGLE_CLOUD_PROJECT is set.")
+
   return client.get_bucket(default_bucket)
 
 

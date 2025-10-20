@@ -18,7 +18,7 @@
 
 import json
 
-from google.appengine.ext import ndb
+from google.cloud import ndb
 
 # Relative imports
 from . import util
@@ -68,7 +68,7 @@ class _PipelineRecord(ndb.Model):
 
   # One of these two will be set, depending on the size of the params.
   params_text = ndb.TextProperty(name='params')
-  params_gcs = ndb.StringProperty(name='params_gcs', indexed=False)
+  params_gcs = ndb.StringProperty(name='params_gcs')  # Indexed in google-cloud-ndb
 
   status = ndb.StringProperty(choices=(WAITING, RUN, DONE, ABORTED),
                              default=WAITING)
@@ -140,10 +140,9 @@ class _SlotRecord(ndb.Model):
 
   # One of these two will be set, depending on the size of the value.
   value_text = ndb.TextProperty(name='value')
-  value_gcs = ndb.StringProperty(name='value_gcs', indexed=False)
+  value_gcs = ndb.StringProperty(name='value_gcs')  # Indexed in google-cloud-ndb
 
-  status = ndb.StringProperty(choices=(FILLED, WAITING), default=WAITING,
-                             indexed=False)
+  status = ndb.StringProperty(choices=(FILLED, WAITING), default=WAITING)
   fill_time = ndb.DateTimeProperty(indexed=False)
 
   @classmethod
@@ -195,8 +194,7 @@ class _BarrierRecord(ndb.Model):
   target = ndb.KeyProperty(kind=_PipelineRecord)
   blocking_slots = ndb.KeyProperty(repeated=True, kind=_SlotRecord)
   trigger_time = ndb.DateTimeProperty(indexed=False)
-  status = ndb.StringProperty(choices=(FIRED, WAITING), default=WAITING,
-                             indexed=False)
+  status = ndb.StringProperty(choices=(FIRED, WAITING), default=WAITING)
 
   @classmethod
   def _get_kind(cls):

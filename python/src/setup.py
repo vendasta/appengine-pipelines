@@ -20,5 +20,10 @@ setuptools.setup(
     include_package_data=True,
     # Exclude these files from installation.
     exclude_package_data={"": ["README"]},
-    install_requires=[],
+    install_requires=[
+        'google-cloud-ndb>=2.3.0',
+        'google-cloud-tasks>=2.16.0',
+        'google-cloud-storage>=2.0.0',
+        'flask>=3.0.0',
+    ],
 )

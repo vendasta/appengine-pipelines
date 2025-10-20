@@ -25,10 +25,10 @@ import zipfile
 
 from flask import make_response, redirect, request
 from flask.views import MethodView
-from google.appengine.api import users
 
 # Relative imports
 from . import util
+from . import users_compat as users
 
 
 class _StatusUiHandler(MethodView):
