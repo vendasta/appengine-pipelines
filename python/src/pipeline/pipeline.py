@@ -44,15 +44,15 @@ import uuid
 
 from flask import abort, make_response, request
 from flask.views import MethodView
-from google.appengine.api import taskqueue, users
-from google.appengine.ext import ndb
-from google.appengine.datastore.datastore_rpc import TransactionOptions
+from google.cloud import ndb
 
 
 # Relative imports
 from . import models, status_ui
 from . import util as mr_util
 from .storage import write_json_gcs
+from . import taskqueue_compat as taskqueue
+from . import users_compat as users
 
 # pylint: disable=g-bad-name
 # pylint: disable=protected-access
@@ -1392,7 +1392,7 @@ class _PipelineContext(object):
             headers={'X-Ae-Slot-Key': slot.key.urlsafe().decode(),
                      'X-Ae-Filler-Pipeline-Key': filler_pipeline_key.urlsafe().decode()})
         task.add(queue_name=self.queue_name, transactional=True)
-      ndb.transaction(txn, propagation=TransactionOptions.ALLOWED)
+      ndb.transaction(txn, propagation=ndb.TransactionOptions.ALLOWED)
 
     self.session_filled_output_names.add(slot.name)
 
@@ -1675,7 +1675,7 @@ class _PipelineContext(object):
     _, output_slots, params_text, params_gcs = _generate_args(
         pipeline, pipeline.outputs, self.queue_name, self.base_path)
 
-    @ndb.transactional(propagation=TransactionOptions.INDEPENDENT)
+    @ndb.transactional(propagation=ndb.TransactionOptions.INDEPENDENT)
     def txn():
       pipeline_record = pipeline._pipeline_key.get()
       if pipeline_record is not None:
