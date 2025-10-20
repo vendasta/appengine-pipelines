@@ -1,19 +1,20 @@
 steps:
-  - name: 'python:3.9.4'
+  - name: 'python:3.13'
     dir: /workspace/python
     script: |
       #!/usr/bin/env bash
-      pip install -r requirements.txt --user
+      pip install --prefer-binary -r requirements.txt --user
     id: "install-dependencies"
 
-  - name: 'python:3.9.4'
+  - name: 'python:3.13'
     dir: /workspace/python
     script: |
       #!/usr/bin/env bash
       python3 -m pytest
     id: "test"
+    waitFor: [ 'install-dependencies' ]
 
-  - name: 'python:3.9.4'
+  - name: 'python:3.13'
     dir: /workspace/python
     script: |
       #!/usr/bin/env bash
@@ -21,3 +22,4 @@ steps:
       python3 -m build src --sdist --wheel --outdir dist/
       python3 -m twine upload --repository-url https://us-central1-python.pkg.dev/repcore-prod/python/ dist/*
     id: "publish"
+    waitFor: [ 'test' ]

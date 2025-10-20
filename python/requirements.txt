@@ -1,4 +1,4 @@
-appengine-python-standard==1.1.5
+appengine-python-standard==1.1.10
 attrs==24.2.0
 backports.tarfile==1.2.0
 blinker==1.9.0
@@ -32,7 +32,6 @@ keyrings.google-artifactregistry-auth==1.1.2
 markdown-it-py==3.0.0
 MarkupSafe==3.0.2
 mdurl==0.1.2
-mock==5.1.0
 more-itertools==10.5.0
 nh3==0.2.19
 packaging==24.2
