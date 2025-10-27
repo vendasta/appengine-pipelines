@@ -224,7 +224,7 @@ class Queue:
         headers = list(task_obj.headers.items()) if task_obj.headers else []
 
         if task_obj.params:
-            body = urllib.parse.urlencode(task_obj.params).encode('utf-8')
+            body = urllib.parse.urlencode(task_obj.params, doseq=True).encode('utf-8')
             headers.append(('content-type', 'application/x-www-form-urlencoded'))
 
         return {
@@ -255,7 +255,9 @@ class Queue:
 
         # Encode parameters as form data if present
         if task_obj.params:
-            body = urllib.parse.urlencode(task_obj.params).encode('utf-8')
+            # Use doseq=True to properly encode list values as multiple parameters
+            # e.g., {'child_indexes': [0, 2]} becomes 'child_indexes=0&child_indexes=2'
+            body = urllib.parse.urlencode(task_obj.params, doseq=True).encode('utf-8')
             http_request.body = body
             http_request.headers['Content-Type'] = 'application/x-www-form-urlencoded'
 
