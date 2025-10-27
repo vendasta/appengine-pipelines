@@ -29,7 +29,7 @@ import json
 import logging
 import os
 
-from google.appengine.ext import ndb
+from google.cloud import ndb
 
 # pylint: disable=protected-access
 

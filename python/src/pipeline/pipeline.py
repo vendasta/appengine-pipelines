@@ -44,15 +44,15 @@ import uuid
 
 from flask import abort, make_response, request
 from flask.views import MethodView
-from google.appengine.api import taskqueue, users
-from google.appengine.ext import ndb
-from google.appengine.datastore.datastore_rpc import TransactionOptions
+from google.cloud import ndb
 
 
 # Relative imports
 from . import models, status_ui
 from . import util as mr_util
 from .storage import write_json_gcs
+from . import taskqueue_compat as taskqueue
+from . import users_compat as users
 
 # pylint: disable=g-bad-name
 # pylint: disable=protected-access
@@ -1329,12 +1329,18 @@ class _PipelineContext(object):
 
   @classmethod
   def from_environ(cls, environ=os.environ):
-    """Constructs a _PipelineContext from the task queue environment."""
+    """Constructs a _PipelineContext from the task queue environment.
+
+    Note: Cloud Tasks does not send X-AppEngine-TaskName/QueueName headers.
+    We generate placeholder values when these headers are missing.
+    """
     base_path, unused = (environ['PATH_INFO'].rsplit('/', 1) + [''])[:2]
-    return cls(
-        environ['HTTP_X_APPENGINE_TASKNAME'],
-        environ['HTTP_X_APPENGINE_QUEUENAME'],
-        base_path)
+
+    # Cloud Tasks doesn't send these headers, so generate placeholders
+    task_name = environ.get('HTTP_X_APPENGINE_TASKNAME', 'cloud-task')
+    queue_name = environ.get('HTTP_X_APPENGINE_QUEUENAME', 'default')
+
+    return cls(task_name, queue_name, base_path)
 
   def fill_slot(self, filler_pipeline_key, slot, value):
     """Fills a slot, enqueueing a task to trigger pending barriers.
@@ -1392,7 +1398,7 @@ class _PipelineContext(object):
             headers={'X-Ae-Slot-Key': slot.key.urlsafe().decode(),
                      'X-Ae-Filler-Pipeline-Key': filler_pipeline_key.urlsafe().decode()})
         task.add(queue_name=self.queue_name, transactional=True)
-      ndb.transaction(txn, propagation=TransactionOptions.ALLOWED)
+      ndb.transaction(txn, propagation=ndb.TransactionOptions.ALLOWED)
 
     self.session_filled_output_names.add(slot.name)
 
@@ -1675,7 +1681,7 @@ class _PipelineContext(object):
     _, output_slots, params_text, params_gcs = _generate_args(
         pipeline, pipeline.outputs, self.queue_name, self.base_path)
 
-    @ndb.transactional(propagation=TransactionOptions.INDEPENDENT)
+    @ndb.transactional(propagation=ndb.TransactionOptions.INDEPENDENT)
     def txn():
       pipeline_record = pipeline._pipeline_key.get()
       if pipeline_record is not None:
@@ -2513,11 +2519,28 @@ class _PipelineContext(object):
 ################################################################################
 
 
+def _is_valid_task_request():
+  """Check if the request is a valid task request.
+
+  Returns True if:
+  - The request has the X-AppEngine-TaskName header (App Engine Task Queue), OR
+  - Running outside App Engine (GAE_ENV not set), which indicates Cloud Tasks or emulator
+
+  Note: Cloud Tasks (both real and emulator) do NOT send X-AppEngine-TaskName header.
+  We allow requests when not on App Engine since Cloud Tasks is expected in those environments.
+  """
+  has_taskname_header = 'HTTP_X_APPENGINE_TASKNAME' in request.environ
+  on_app_engine = os.environ.get('GAE_ENV') is not None
+
+  # Allow if we have the header (Task Queue) OR we're not on App Engine (Cloud Tasks)
+  return has_taskname_header or not on_app_engine
+
+
 class _BarrierHandler(MethodView):
   """Request handler for triggering barriers."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+    if not _is_valid_task_request():
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
@@ -2532,7 +2555,7 @@ class _PipelineHandler(MethodView):
   """Request handler for running pipelines."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+    if not _is_valid_task_request():
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
@@ -2546,7 +2569,7 @@ class _FanoutAbortHandler(MethodView):
   """Request handler for fanning out abort notifications."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+    if not _is_valid_task_request():
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
@@ -2561,7 +2584,7 @@ class _FanoutHandler(MethodView):
   """Request handler for fanning out pipeline children."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+    if not _is_valid_task_request():
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
@@ -2610,7 +2633,7 @@ class _CleanupHandler(MethodView):
   """Request handler for cleaning up a Pipeline."""
 
   def post(self):
-    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
+    if not _is_valid_task_request():
       return abort(403)
 
     root_pipeline_key = ndb.Key(urlsafe=request.values.get('root_pipeline_key'))
