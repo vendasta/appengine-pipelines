@@ -10,6 +10,8 @@ On App Engine, when a user is authenticated, the following headers are set:
 - X-Appengine-User-Is-Admin: "1" if user is an admin, "0" otherwise
 """
 
+import os
+
 from flask import request
 from typing import Optional
 
@@ -70,8 +72,9 @@ def is_current_user_admin() -> bool:
     Returns:
         True if the current user is an admin, False otherwise
     """
-    # Check the admin header
-    is_admin = request.headers.get('X-Appengine-User-Is-Admin', '0')
+    is_admin = request.headers.get('X-Appengine-User-Is-Admin')
+    if is_admin is None:
+        is_admin = os.environ.get('USER_IS_ADMIN', '0')
     return is_admin == '1'
 
 

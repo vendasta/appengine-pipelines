@@ -68,7 +68,7 @@ class _PipelineRecord(ndb.Model):
 
   # One of these two will be set, depending on the size of the params.
   params_text = ndb.TextProperty(name='params')
-  params_gcs = ndb.StringProperty(name='params_gcs')  # Indexed in google-cloud-ndb
+  params_gcs = ndb.StringProperty(name='params_gcs')
 
   status = ndb.StringProperty(choices=(WAITING, RUN, DONE, ABORTED),
                              default=WAITING)
@@ -140,7 +140,7 @@ class _SlotRecord(ndb.Model):
 
   # One of these two will be set, depending on the size of the value.
   value_text = ndb.TextProperty(name='value')
-  value_gcs = ndb.StringProperty(name='value_gcs')  # Indexed in google-cloud-ndb
+  value_gcs = ndb.StringProperty(name='value_gcs')
 
   status = ndb.StringProperty(choices=(FILLED, WAITING), default=WAITING)
   fill_time = ndb.DateTimeProperty(indexed=False)

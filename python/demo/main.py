@@ -135,32 +135,7 @@ class MainHandler(MethodView):
 
 app = Flask(__name__)
 
-# NDB context middleware for google-cloud-ndb
-@app.before_request
-def ndb_context():
-    """Create an NDB context for each request."""
-    # Context is automatically cleaned up after the request
-    pass
-
-# Use NDB context manager globally
-ndb_client = ndb.Client()
-
-@app.before_request
-def push_ndb_context():
-    """Push NDB context before each request."""
-    ctx = ndb_client.context()
-    ctx.__enter__()
-    # Store context in flask.g so we can exit it later
-    from flask import g
-    g.ndb_context = ctx
-
-@app.teardown_request
-def pop_ndb_context(exception=None):
-    """Pop NDB context after each request."""
-    from flask import g
-    ctx = getattr(g, 'ndb_context', None)
-    if ctx:
-        ctx.__exit__(None, None, None)
+app.wsgi_app = pipeline.wrap_wsgi_app(app.wsgi_app)
 
 app.add_url_rule('/', view_func=MainHandler.as_view('main'))
 app.add_url_rule('/pipeline', view_func=StartPipelineHandler.as_view('pipeline'))

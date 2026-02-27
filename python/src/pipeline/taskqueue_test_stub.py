@@ -8,6 +8,7 @@ import base64
 import datetime
 import threading
 import urllib.parse
+import uuid
 from typing import Dict, List, Any
 
 
@@ -53,9 +54,12 @@ class TaskQueueTestStub:
             if task_name and task_name in self._tombstones[queue_name]:
                 raise Exception(f"Task name tombstoned: {task_name}")
 
-            # Check for duplicate task names
+            if not task_name:
+                task_name = f"auto-{uuid.uuid4().hex}"
+                task_dict['name'] = task_name
+
             existing_names = {t.get('name') for t in self._queues[queue_name]}
-            if task_name and task_name in existing_names:
+            if task_name in existing_names:
                 raise Exception(f"Task already exists: {task_name}")
 
             self._queues[queue_name].append(task_dict)

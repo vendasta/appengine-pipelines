@@ -1,7 +1,6 @@
 """Shared code used by Pipeline API tests."""
 
 import base64
-import calendar
 import datetime
 import logging
 import os
@@ -42,10 +41,6 @@ def delete_tasks(task_list, queue_name='default'):
     # NOTE: Delete tasks but keep them in tombstones
     stub.delete_task(queue_name, task['name'])
 
-def utc_to_local(utc_datetime):
-    timestamp = calendar.timegm(utc_datetime.timetuple())
-    local_datetime = datetime.datetime.fromtimestamp(timestamp)
-    return local_datetime.replace(microsecond=utc_datetime.microsecond)
 
 class TaskRunningMixin:
   """A mix-in that runs a Pipeline using tasks."""

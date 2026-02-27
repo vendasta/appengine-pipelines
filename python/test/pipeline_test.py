@@ -34,8 +34,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
 
 import testutil
 from flask import Flask
-from google.appengine.ext import ndb, testbed
-from google.appengine.api.datastore_errors import BadRequestError
+from google.cloud import ndb
+from google.api_core.exceptions import BadRequest as BadRequestError
 
 from pipeline import common, pipeline, storage, testing as test_shared
 
@@ -53,15 +53,6 @@ class TestBase(testutil.TestSetupMixin, unittest.TestCase):
   def setUp(self):
     super(TestBase, self).setUp()
     self.maxDiff = 10**10
-    # First, create an instance of the Testbed class.
-    self.testbed = testbed.Testbed()
-    # Then activate the testbed, which prepares the service stubs for use.
-    self.testbed.activate()
-    # Next, declare which service stubs you want to use.
-    self.testbed.init_urlfetch_stub()
-    self.testbed.init_app_identity_stub()
-    self.testbed.init_datastore_v3_stub()
-    ndb.get_context().clear_cache()
 
     self.storageData = {}
     def _write_json_gcs(encoded_value, pipeline_id=None):
@@ -73,9 +64,6 @@ class TestBase(testutil.TestSetupMixin, unittest.TestCase):
     pipeline.read_blob_gcs = lambda x: self.storageData.get(x)
     storage.write_json_gcs = _write_json_gcs
     storage.read_blob_gcs = lambda x: self.storageData.get(x)
-
-  def tearDown(self):
-    self.testbed.deactivate()
 
   def assertIn(self, the_thing, what_thing_should_be_in):
     """Asserts that something is contained in something else."""
@@ -466,7 +454,7 @@ class PipelineTest(TestBase):
     eta = datetime.datetime.now() + datetime.timedelta(seconds=30)
     task = stage.start(return_task=True, eta=eta)
     self.assertEqual(0, len(test_shared.get_tasks()))
-    self.assertEqual(eta, test_shared.utc_to_local(task.eta))
+    self.assertEqual(eta, task.eta)
 
   def testStartCountdownAndEta(self):
     """Tests starting a pipeline with both a countdown and eta."""
@@ -700,7 +688,7 @@ class PipelineTest(TestBase):
         urllib.parse.parse_qs(task.payload))
     self.assertEqual('POST', task.method)
     self.assertEqual('my-name', task.name)
-    self.assertEqual(now, test_shared.utc_to_local(task.eta))
+    self.assertEqual(now, task.eta)
 
   def testAccesorsUnknown(self):
     """Tests using accessors when they have unknown values."""
@@ -1665,7 +1653,7 @@ class PipelineContextTest(TestBase):
           }, task['params'])
 
       next_eta = when_list[attempt] + datetime.timedelta(seconds=delay_seconds)
-      self.assertEqual(next_eta, test_shared.utc_to_local(task['eta']))
+      self.assertEqual(next_eta, task['eta'])
 
       pipeline_record = self.pipeline1_key.get()
       self.assertEqual(attempt + 1, pipeline_record.current_attempt)
@@ -2953,31 +2941,13 @@ class NoTransactionPipeline(PublicPipeline):
 
   def callback(self, **kwargs):
     if ndb.in_transaction():
-      try:
-        # If we are in non xg-transaction, we should be unable to write to 24
-        # new entity groups (1 is used to read pipeline state).
-        # Assumes the entity group limit is 25 (was previously 5).
-        for _ in range(24):
-          DummyKind().put()
-        try:
-          # Verify something is not wrong in the testbed and/or limits changed
-          DummyKind().put()
-          return (500, 'text/plain', 'More than 5 entity groups used.')
-        except BadRequestError:
-          return (203, 'text/plain', 'In a XG transaction')
-      except BadRequestError:
-        return (202, 'text/plain', 'In a non-XG transaction')
+      return (202, 'text/plain', 'In a transaction')
     else:
       return (201, 'text/plain', 'Outside a transaction.')
 
 
-class NoXgTransactionPipeline(NoTransactionPipeline):
-  """Pipeline that verifies the callback is in non-XG transaction."""
-  _callback_xg_transaction = False
-
-
-class XgTransactionPipeline(NoTransactionPipeline):
-  """Pipeline that verifies the callback is in a XG transaction."""
+class InTransactionPipeline(NoTransactionPipeline):
+  """Pipeline that verifies the callback runs in a transaction."""
   _callback_xg_transaction = True
 
 
@@ -3065,13 +3035,9 @@ class CallbackHandlerTest(TestBase):
     """Tests that the callback is not called from within a trans. by default."""
     self.RunTransactionTest(NoTransactionPipeline(), 201)
 
-  def testNonXgTransaction(self):
-    """Tests that the callback is called within a single EG transaction."""
-    self.RunTransactionTest(NoXgTransactionPipeline(), 202)
-
-  def testXgTransaction(self):
-    """Tests that the callback is called within a cross EG transaction."""
-    self.RunTransactionTest(XgTransactionPipeline(), 203)
+  def testTransactionCallback(self):
+    """Tests that the callback is called within a transaction."""
+    self.RunTransactionTest(InTransactionPipeline(), 202)
 
   def testGiveUpOnTask(self):
     """Tests that after N retries the task is abandoned."""

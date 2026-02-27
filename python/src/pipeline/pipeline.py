@@ -23,7 +23,7 @@ __all__ = [
     'UnexpectedPipelineError', 'PipelineStatusError', 'Slot', 'Pipeline',
     'PipelineFuture', 'After', 'InOrder', 'Retry', 'Abort', 'get_status_tree',
     'get_pipeline_names', 'get_root_list', 'create_handlers_map',
-    'set_enforce_auth',
+    'set_enforce_auth', 'wrap_wsgi_app',
 ]
 
 import calendar
@@ -65,13 +65,13 @@ _SlotRecord = models._SlotRecord
 _StatusRecord = models._StatusRecord
 
 
-# Overall TODOs:
-# - Add a human readable name for start()
-
-# Potential TODOs:
-# - Add support for ANY N barriers.
-# - Allow Pipelines to declare they are "short" and optimize the evaluate()
-#   function to run as many of them in quick succession.
+def _transaction(callback, **kwargs):
+  """Wrapper around ndb.transaction that silently handles ndb.Rollback."""
+  kwargs.pop('xg', None)
+  try:
+    return ndb.transaction(callback, **kwargs)
+  except ndb.exceptions.Rollback:
+    return None
 # - Add support in all Pipelines for hold/release where up-stream
 #   barriers will fire but do nothing because the Pipeline is not ready.
 
@@ -1329,18 +1329,12 @@ class _PipelineContext(object):
 
   @classmethod
   def from_environ(cls, environ=os.environ):
-    """Constructs a _PipelineContext from the task queue environment.
-
-    Note: Cloud Tasks does not send X-AppEngine-TaskName/QueueName headers.
-    We generate placeholder values when these headers are missing.
-    """
+    """Constructs a _PipelineContext from the task queue environment."""
     base_path, unused = (environ['PATH_INFO'].rsplit('/', 1) + [''])[:2]
-
-    # Cloud Tasks doesn't send these headers, so generate placeholders
-    task_name = environ.get('HTTP_X_APPENGINE_TASKNAME', 'cloud-task')
-    queue_name = environ.get('HTTP_X_APPENGINE_QUEUENAME', 'default')
-
-    return cls(task_name, queue_name, base_path)
+    return cls(
+        environ['HTTP_X_APPENGINE_TASKNAME'],
+        environ['HTTP_X_APPENGINE_QUEUENAME'],
+        base_path)
 
   def fill_slot(self, filler_pipeline_key, slot, value):
     """Fills a slot, enqueueing a task to trigger pending barriers.
@@ -1398,7 +1392,7 @@ class _PipelineContext(object):
             headers={'X-Ae-Slot-Key': slot.key.urlsafe().decode(),
                      'X-Ae-Filler-Pipeline-Key': filler_pipeline_key.urlsafe().decode()})
         task.add(queue_name=self.queue_name, transactional=True)
-      ndb.transaction(txn, propagation=ndb.TransactionOptions.ALLOWED)
+      _transaction(txn, propagation=ndb.TransactionOptions.ALLOWED)
 
     self.session_filled_output_names.add(slot.name)
 
@@ -1584,7 +1578,7 @@ class _PipelineContext(object):
       task.add(queue_name=self.queue_name, transactional=True)
       return True
 
-    return ndb.transaction(txn)
+    return _transaction(txn)
 
   def continue_abort(self,
                      root_pipeline_key,
@@ -2395,7 +2389,7 @@ class _PipelineContext(object):
               blocking_slot_keys.union(set(finalize_barrier.blocking_slots)))
           finalize_barrier.put()
 
-    ndb.transaction(txn)
+    _transaction(txn)
 
   def transition_complete(self, pipeline_key):
     """Marks the given pipeline as complete.
@@ -2423,7 +2417,7 @@ class _PipelineContext(object):
       pipeline_record.finalized_time = self._gettime()
       pipeline_record.put()
 
-    ndb.transaction(txn)
+    _transaction(txn)
 
   def transition_retry(self, pipeline_key, retry_message):
     """Marks the given pipeline as requiring another retry.
@@ -2486,7 +2480,7 @@ class _PipelineContext(object):
 
       pipeline_record.put()
 
-    ndb.transaction(txn)
+    _transaction(txn)
 
   def transition_aborted(self, pipeline_key):
     """Makes the given pipeline as having aborted.
@@ -2514,33 +2508,16 @@ class _PipelineContext(object):
       pipeline_record.finalized_time = self._gettime()
       pipeline_record.put()
 
-    ndb.transaction(txn)
+    _transaction(txn)
 
 ################################################################################
-
-
-def _is_valid_task_request():
-  """Check if the request is a valid task request.
-
-  Returns True if:
-  - The request has the X-AppEngine-TaskName header (App Engine Task Queue), OR
-  - Running outside App Engine (GAE_ENV not set), which indicates Cloud Tasks or emulator
-
-  Note: Cloud Tasks (both real and emulator) do NOT send X-AppEngine-TaskName header.
-  We allow requests when not on App Engine since Cloud Tasks is expected in those environments.
-  """
-  has_taskname_header = 'HTTP_X_APPENGINE_TASKNAME' in request.environ
-  on_app_engine = os.environ.get('GAE_ENV') is not None
-
-  # Allow if we have the header (Task Queue) OR we're not on App Engine (Cloud Tasks)
-  return has_taskname_header or not on_app_engine
 
 
 class _BarrierHandler(MethodView):
   """Request handler for triggering barriers."""
 
   def post(self):
-    if not _is_valid_task_request():
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
@@ -2555,7 +2532,7 @@ class _PipelineHandler(MethodView):
   """Request handler for running pipelines."""
 
   def post(self):
-    if not _is_valid_task_request():
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
@@ -2569,7 +2546,7 @@ class _FanoutAbortHandler(MethodView):
   """Request handler for fanning out abort notifications."""
 
   def post(self):
-    if not _is_valid_task_request():
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
@@ -2584,7 +2561,7 @@ class _FanoutHandler(MethodView):
   """Request handler for fanning out pipeline children."""
 
   def post(self):
-    if not _is_valid_task_request():
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       return abort(403)
 
     context = _PipelineContext.from_environ(request.environ)
@@ -2633,7 +2610,7 @@ class _CleanupHandler(MethodView):
   """Request handler for cleaning up a Pipeline."""
 
   def post(self):
-    if not _is_valid_task_request():
+    if 'HTTP_X_APPENGINE_TASKNAME' not in request.environ:
       return abort(403)
 
     root_pipeline_key = ndb.Key(urlsafe=request.values.get('root_pipeline_key'))
@@ -2754,8 +2731,8 @@ class _CallbackHandler(MethodView):
     # callback_xg_transaction is a 3-valued setting (None=no trans,
     # False=1-eg-trans, True=xg-trans)
     if pipeline_func_class._callback_xg_transaction is not None:
-      callback_result = ndb.transaction(perform_callback, 
-                                        xg=pipeline_func_class._callback_xg_transaction)
+      callback_result = _transaction(perform_callback,
+                                     xg=pipeline_func_class._callback_xg_transaction)
     else:
       callback_result = perform_callback()
 
@@ -3138,7 +3115,12 @@ def get_root_list(class_path=None, cursor=None, count=50):
   query = query.filter(_PipelineRecord.is_root_pipeline == True)
   query = query.order(-_PipelineRecord.start_time)
 
-  root_list, cursor, more = query.fetch_page(count, start_cursor=ndb.Cursor(urlsafe=cursor))
+  start_cursor = ndb.Cursor(urlsafe=cursor) if cursor else None
+  root_list, next_cursor, _ = query.fetch_page(count, start_cursor=start_cursor)
+  has_more = False
+  if len(root_list) == count:
+    peek, _, _ = query.fetch_page(1, start_cursor=next_cursor)
+    has_more = len(peek) > 0
 
   fetch_list = []
   for pipeline_record in root_list:
@@ -3179,8 +3161,8 @@ def get_root_list(class_path=None, cursor=None, count=50):
       results.append(output)
 
   result_dict = {}
-  if more:
-    result_dict.update(cursor=cursor.urlsafe().decode())
+  if has_more:
+    result_dict.update(cursor=next_cursor.urlsafe().decode())
   result_dict.update(pipelines=results)
   return result_dict
 
@@ -3205,7 +3187,7 @@ def create_handlers_map(prefix='/_ah/pipeline'):
     prefix: url prefix to use.
 
   Returns:
-    list of (regexp, handler) pairs for WSGIApplication constructor.
+    list of (url, handler) pairs.
   """
   return [
       (prefix + '/output', _BarrierHandler),
@@ -3221,3 +3203,28 @@ def create_handlers_map(prefix='/_ah/pipeline'):
       (prefix + '/rpc/list', status_ui._RootListHandler),
       (prefix + '/<path:resource>', status_ui._StatusUiHandler),
       ]
+
+
+class _NdbMiddleware:
+  """WSGI middleware that provides google-cloud-ndb context per request.
+
+  Drop-in replacement for wrap_wsgi_app from appengine-python-standard.
+  """
+
+  def __init__(self, wsgi_app):
+    self._wsgi_app = wsgi_app
+    self._ndb_client = ndb.Client()
+
+  def __call__(self, environ, start_response):
+    with self._ndb_client.context():
+      return self._wsgi_app(environ, start_response)
+
+
+def wrap_wsgi_app(wsgi_app, **kwargs):
+  """Wrap a WSGI app with NDB context middleware.
+
+  Drop-in replacement for google.appengine.api.wrap_wsgi_app.
+  Any kwargs (e.g. use_legacy_context_mode) are accepted and ignored
+  for backward compatibility.
+  """
+  return _NdbMiddleware(wsgi_app)
