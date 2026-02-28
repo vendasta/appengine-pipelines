@@ -51,7 +51,8 @@ class Task:
     """Compatibility wrapper for Task Queue Task using Cloud Tasks."""
 
     def __init__(self, url=None, params=None, name=None, method='POST',
-                 headers=None, countdown=None, eta=None, target=None, **kwargs):
+                 headers=None, countdown=None, eta=None, target=None,
+                 payload=None, **kwargs):
         self.url = url
         self.params = params or {}
         self.name = name
@@ -59,6 +60,7 @@ class Task:
         self.headers = headers or {}
         self.countdown = countdown
         self.target = target
+        self._raw_payload = payload
         self.kwargs = kwargs
 
         if eta and countdown:
@@ -76,6 +78,10 @@ class Task:
 
     @property
     def payload(self):
+        if self._raw_payload is not None:
+            if isinstance(self._raw_payload, bytes):
+                return self._raw_payload
+            return self._raw_payload
         if self.params:
             return urllib.parse.urlencode(self.params, doseq=True)
         return ''
@@ -162,7 +168,12 @@ class Queue:
         body = b''
         headers = list(task_obj.headers.items()) if task_obj.headers else []
 
-        if task_obj.params:
+        if task_obj._raw_payload is not None:
+            if isinstance(task_obj._raw_payload, bytes):
+                body = task_obj._raw_payload
+            else:
+                body = task_obj._raw_payload.encode('utf-8') if isinstance(task_obj._raw_payload, str) else task_obj._raw_payload
+        elif task_obj.params:
             body = urllib.parse.urlencode(task_obj.params, doseq=True).encode('utf-8')
             headers.append(('content-type', 'application/x-www-form-urlencoded'))
 
@@ -173,6 +184,7 @@ class Queue:
             'headers': headers,
             'body': base64.b64encode(body),
             'eta': task_obj.eta,
+            'queue_name': self.name,
         }
 
     def _convert_task(self, task_obj: Task) -> tasks_v2.Task:
@@ -181,7 +193,12 @@ class Queue:
         headers = dict(task_obj.headers) if task_obj.headers else {}
 
         body = b''
-        if task_obj.params:
+        if task_obj._raw_payload is not None:
+            if isinstance(task_obj._raw_payload, bytes):
+                body = task_obj._raw_payload
+            else:
+                body = task_obj._raw_payload.encode('utf-8') if isinstance(task_obj._raw_payload, str) else task_obj._raw_payload
+        elif task_obj.params:
             body = urllib.parse.urlencode(task_obj.params, doseq=True).encode('utf-8')
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
 

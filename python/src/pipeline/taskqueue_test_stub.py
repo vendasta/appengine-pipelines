@@ -90,13 +90,6 @@ class TaskQueueTestStub:
         """
         with self._lock:
             if queue_name in self._queues:
-                # Tombstone all tasks
-                for task in self._queues[queue_name]:
-                    task_name = task.get('name')
-                    if task_name:
-                        if queue_name not in self._tombstones:
-                            self._tombstones[queue_name] = set()
-                        self._tombstones[queue_name].add(task_name)
                 self._queues[queue_name] = []
 
     def clear_all(self):
